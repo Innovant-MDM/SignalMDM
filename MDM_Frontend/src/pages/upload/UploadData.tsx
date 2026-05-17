@@ -175,12 +175,20 @@ export default function UploadData() {
     const arr = Array.from(files);
     const newEntries: PendingEntry[] = [];
     const tooLarge: string[] = [];
+    const unsupported: string[] = [];
 
     for (const f of arr) {
       if (f.size > 100 * 1024 * 1024) {
         tooLarge.push(f.name);
         continue;
       }
+      
+      const ext = f.name.split('.').pop()?.toLowerCase();
+      if (!ext || !['csv', 'json', 'xlsx'].includes(ext)) {
+        unsupported.push(f.name);
+        continue;
+      }
+
       let previewCount: number | null = null;
       if (f.name.toLowerCase().endsWith('.csv')) {
         try { previewCount = countCsvRows(await f.text()); } catch { /* ok */ }
@@ -188,9 +196,15 @@ export default function UploadData() {
       newEntries.push({ id: crypto.randomUUID(), file: f, label: f.name.replace(/\.[^.]+$/, ''), previewCount });
     }
 
-    if (tooLarge.length > 0) {
-      setUploadError(`Skipped ${tooLarge.length} file(s) exceeding 100MB: ${tooLarge.join(', ')}`);
+    if (tooLarge.length > 0 || unsupported.length > 0) {
+      const errMsgs = [];
+      if (tooLarge.length > 0) errMsgs.push(`Skipped ${tooLarge.length} file(s) exceeding 100MB: ${tooLarge.join(', ')}`);
+      if (unsupported.length > 0) errMsgs.push(`Skipped ${unsupported.length} unsupported file(s): ${unsupported.join(', ')}. Only CSV, JSON, and XLSX are allowed.`);
+      setUploadError(errMsgs.join(' | '));
+    } else {
+      setUploadError(null);
     }
+    
     setPendingEntries(prev => [...prev, ...newEntries]);
   }, []);
 
@@ -506,12 +520,12 @@ export default function UploadData() {
                           onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click(); }}
                         >
                           <span className="up-dropzone__icon">☁️</span>
-                          <span className="up-dropzone__label">Drag &amp; drop CSV/JSON files here</span>
+                          <span className="up-dropzone__label">Drag &amp; drop CSV/JSON/XLSX files here</span>
                           <span className="up-dropzone__sub">or click to browse — multiple files supported</span>
                           <input
                             ref={fileInputRef}
                             type="file"
-                            accept=".csv,.json"
+                            accept=".csv,.json,.xlsx"
                             multiple
                             style={{ display: 'none' }}
                             onChange={handleInputChange}
@@ -557,7 +571,7 @@ export default function UploadData() {
                             >+ Add more files</button>
                             <input
                               ref={fileInputRef}
-                              type="file" accept=".csv,.json" multiple
+                              type="file" accept=".csv,.json,.xlsx" multiple
                               style={{ display: 'none' }}
                               onChange={handleInputChange}
                             />

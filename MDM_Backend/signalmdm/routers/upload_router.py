@@ -344,10 +344,10 @@ async def upload_files_to_session(
         # Detect file type
         fname = upload_file.filename or "upload"
         ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-        if ext not in ("csv", "json"):
+        if ext not in ("csv", "json", "xlsx"):
             raise HTTPException(
                 status_code=400,
-                detail=f"File '{fname}' is not CSV or JSON.",
+                detail=f"File '{fname}' is not CSV, JSON, or XLSX.",
             )
 
         # Count records
