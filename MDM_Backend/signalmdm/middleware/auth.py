@@ -55,6 +55,7 @@ class TokenPayload(BaseModel):
 
     user_id:   str
     email:     str
+    username:  str
     tenant_id: str  # Can be UUID string or "platform"
     role:      str
     fp_hash:   str
@@ -162,9 +163,15 @@ async def require_auth(
         )
 
     # --- 6. Attach to request state + return --------------------------------
+    raw_username = payload.get("username", "Unknown")
+    email_str = payload.get("email", "")
+    if raw_username == "Unknown" and email_str:
+        raw_username = email_str.split("@")[0]
+
     token_payload = TokenPayload(
         user_id=user_id,
-        email=email,
+        email=email_str,
+        username=raw_username,
         tenant_id=tenant_id,
         role=role,
         fp_hash=fp_hash,

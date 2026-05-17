@@ -78,9 +78,12 @@ async function request<T>(
   extraHeaders?: Record<string, string>,
   _isRetry = false,
 ): Promise<StandardResponse<T>> {
+  const headers = getHeaders(extraHeaders);
+  console.debug(`[api] ${method} ${path}`, { headers, body });
+  
   const response = await fetch(`${BASE_URL}${path}`, {
     method,
-    headers: getHeaders(extraHeaders),
+    headers,
     credentials: "include", // ← sends httpOnly cookies
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });

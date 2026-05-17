@@ -19,8 +19,8 @@ const NAV: NavGroup[] = [
     group: 'Foundation',
     items: [
       { label: 'Source Systems',  path: '/sources',     icon: '⬡', roles: ['super_admin','admin','data_architect'] },
-      { label: 'Ingestion Runs',  path: '/ingestion',   icon: '↻', roles: ['super_admin','admin','data_architect','data_manager'] },
       { label: 'Upload Data',     path: '/upload',      icon: '⬆', roles: ['super_admin','admin','data_architect'] },
+      { label: 'Ingestion Runs',  path: '/ingestion',   icon: '↻', roles: ['super_admin','admin','data_architect','data_manager'] },
       { label: 'Raw Landing',     path: '/raw-landing', icon: '⬇', roles: ['super_admin','admin','data_architect','data_manager'] },
       { label: 'Staging Records', path: '/staging',     icon: '◫', roles: ['super_admin','admin','data_architect','data_manager'] },
     ],

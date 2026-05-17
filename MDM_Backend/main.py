@@ -47,6 +47,7 @@ from signalmdm.routers.api_logs_router      import router as api_logs_router
 from signalmdm.routers.auth_router          import router as auth_router
 from signalmdm.routers.admin_router         import router as admin_router
 from signalmdm.routers.tenant_config_router import router as tenant_config_router
+from signalmdm.routers.upload_router        import router as upload_router
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +276,7 @@ app.include_router(api_logs_router,      prefix=PREFIX)
 app.include_router(auth_router,          prefix=PREFIX)
 app.include_router(admin_router,         prefix=PREFIX)
 app.include_router(tenant_config_router, prefix=PREFIX)
+app.include_router(upload_router,        prefix=PREFIX)
 
 
 # ---------------------------------------------------------------------------

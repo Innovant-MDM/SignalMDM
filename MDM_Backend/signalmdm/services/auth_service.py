@@ -215,7 +215,7 @@ def _issue_tokens(
         role       = "admin",
         device_id  = device_id,
         user_agent = user_agent,
-        extra_claims = {"email": admin.email},
+        extra_claims = {"email": admin.email, "username": admin.username},
         expires_minutes = 45,
     )
 

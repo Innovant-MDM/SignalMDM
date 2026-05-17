@@ -1,835 +1,601 @@
-// UploadData — integrated with ingestion upload API (same patterns as IngestionRuns / SourceSystems)
-import {
-    useState,
-    useRef,
-    useCallback,
-    useEffect,
-    useMemo,
-    type DragEvent,
-    type ChangeEvent,
-} from 'react';
-
+import { useState, useRef, useCallback, useEffect, type ChangeEvent, type DragEvent } from 'react';
 import '../../styles/theme.css';
 import '../../styles/UploadData.css';
-
 import { authService } from '../../services/authService';
-import { sourceService, type SourceRecord } from '../../services/sourceService';
-import { tenantService, type TenantRecord } from '../../services/tenantService';
+import { useTenantConfig } from '../../context/TenantConfigContext';
 import {
-    ingestionRunService,
-    type IngestionRunRecord,
-    type RunStatus,
-} from '../../services/ingestionRunService';
-import { uploadService, type IngestionUploadResultData } from '../../services/uploadService';
+  uploadSessionService,
+  type UploadSession,
+  type UploadSessionFile,
+} from '../../services/uploadSessionService';
 import { ApiError } from '../../services/api';
 
-type InputMode = 'file' | 'json';
-type UploadStatus = 'uploading' | 'success' | 'error' | null;
-type ValidationStatus = 'VALID' | 'WARNING' | 'ERROR';
+// ── helpers ────────────────────────────────────────────────────────────────
 
-interface PreviewRow {
-    rowNum: number;
-    srcId: string;
-    payload: string;
-    status: ValidationStatus;
+function fmtBytes(b: number): string {
+  if (b < 1024) return `${b} B`;
+  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / 1048576).toFixed(2)} MB`;
+}
+function fmtDate(s: string): string {
+  return new Date(s).toLocaleString();
+}
+function fmtFriendlyDate(s: string): string {
+  const d = new Date(s);
+  const hour = d.getHours();
+  const min = d.getMinutes().toString().padStart(2, '0');
+  const sec = d.getSeconds().toString().padStart(2, '0');
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 || 12;
+  const day = d.getDate().toString().padStart(2, '0');
+  const month = (d.getMonth() + 1).toString().padStart(2, '0');
+  const year = d.getFullYear();
+  return `${hour12}:${min}:${sec} ${ampm} ${day}/${month}/${year}`;
 }
 
-interface ErrorState {
-    runId?: string | null;
-    entityType?: string | null;
-    file?: string | null;
-    json?: string | null;
-    general?: string | null;
+// ── pending file row (before upload) ──────────────────────────────────────
+
+interface PendingEntry {
+  id: string;          // local key
+  file: File;
+  label: string;       // user-assigned label
+  previewCount: number | null; // CSV rows counted client-side
 }
 
-const MAX_FILE_MB = 50;
-const MAX_PREVIEW_ROWS = 40;
-const UPLOADABLE_STATES: RunStatus[] = ['CREATED', 'RUNNING', 'RAW_LOADED'];
-
-const FORMAT_ICONS: Record<string, string> = { csv: '📄', json: '📋', default: '📁' };
-
-const JSON_PLACEHOLDER = `[
-  { "customerName": "Example Co", "emailId": "a@example.com" }
-]`;
-
-function getFileExt(name: string): string {
-    const parts = name.split('.');
-    return (parts[parts.length - 1] || '').toLowerCase();
+function countCsvRows(text: string): number {
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+  return Math.max(0, lines.length - 1);
 }
 
-function formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-}
+// ── view modes ─────────────────────────────────────────────────────────────
 
-/** Naive CSV row split with quoted-field support (good enough for preview). */
-function splitCsvLine(line: string): string[] {
-    const out: string[] = [];
-    let cur = '';
-    let inQ = false;
-    for (let i = 0; i < line.length; i++) {
-        const c = line[i];
-        if (c === '"') {
-            inQ = !inQ;
-            continue;
-        }
-        if (c === ',' && !inQ) {
-            out.push(cur.trim());
-            cur = '';
-            continue;
-        }
-        cur += c;
-    }
-    out.push(cur.trim());
-    return out;
-}
+type View = 'list' | 'newSession' | 'detail';
 
-function buildPreviewFromCsv(text: string, maxRows: number): PreviewRow[] {
-    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length < 2) return [];
-    const headers = splitCsvLine(lines[0]);
-    if (!headers.length) return [];
-    const rows: PreviewRow[] = [];
-    for (let i = 1; i < lines.length && rows.length < maxRows; i++) {
-        const cells = splitCsvLine(lines[i]);
-        const obj: Record<string, string> = {};
-        headers.forEach((h, j) => {
-            obj[h] = cells[j] ?? '';
-        });
-        const idKey =
-            headers.find((h) => /^(id|external[_-]?id|source[_-]?id|record[_-]?id)$/i.test(h)) ||
-            headers[0];
-        const srcId = String(obj[idKey] ?? `row-${i}`);
-        const payload = JSON.stringify(obj);
-        const vals = Object.values(obj);
-        let status: ValidationStatus = 'VALID';
-        if (vals.every((v) => !v || String(v).trim() === '')) status = 'ERROR';
-        else if (vals.some((v) => !v || String(v).trim() === '')) status = 'WARNING';
-        rows.push({ rowNum: i, srcId, payload, status });
-    }
-    return rows;
-}
-
-function buildPreviewFromJson(text: string, maxRows: number): PreviewRow[] {
-    const data = JSON.parse(text) as unknown;
-    const arr = Array.isArray(data) ? data : [data];
-    return arr.slice(0, maxRows).map((row, idx) => {
-        const o = row && typeof row === 'object' ? (row as Record<string, unknown>) : {};
-        const idVal = o.id ?? o.externalId ?? o.sourceId;
-        const srcId =
-            idVal != null && String(idVal).trim() !== '' ? String(idVal) : `row-${idx + 1}`;
-        const payload = JSON.stringify(row);
-        const vals = Object.values(o).map((v) => (v == null ? '' : String(v)));
-        let status: ValidationStatus = 'VALID';
-        if (vals.every((v) => v.trim() === '')) status = 'ERROR';
-        else if (vals.some((v) => v.trim() === '')) status = 'WARNING';
-        return { rowNum: idx + 1, srcId, payload, status };
-    });
-}
-
-function runLabel(run: IngestionRunRecord): string {
-    const short = run.id.slice(0, 8);
-    return `${short}… — ${run.sourceName} (${run.state})`;
-}
-
+// ===========================================================================
 export default function UploadData() {
-    const [runs, setRuns] = useState<IngestionRunRecord[]>([]);
-    const [sources, setSources] = useState<SourceRecord[]>([]);
-    const [tenants, setTenants] = useState<TenantRecord[]>([]);
-    const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-    const [selectedTenantId, setSelectedTenantId] = useState<string>('ALL');
-    const [pageLoading, setPageLoading] = useState(true);
-    const [pageError, setPageError] = useState<string | null>(null);
+  // ── tenant from global context (same as IngestionRuns) ──
+  const { activeTenantId, activeTenantName } = useTenantConfig();
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
 
-    const [runId, setRunId] = useState<string>('');
-    const [entityType, setEntityType] = useState<string>('');
-    const [inputMode, setInputMode] = useState<InputMode>('file');
-    const [file, setFile] = useState<File | null>(null);
-    const [jsonPayload, setJsonPayload] = useState<string>('');
-    const [isDragging, setIsDragging] = useState(false);
-    const [errors, setErrors] = useState<ErrorState>({});
-    const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-    const [uploadStatus, setUploadStatus] = useState<UploadStatus>(null);
-    const [previewRows, setPreviewRows] = useState<PreviewRow[] | null>(null);
-    const [jsonError, setJsonError] = useState('');
-    const [lastResult, setLastResult] = useState<IngestionUploadResultData | null>(null);
-    const [pipelineState, setPipelineState] = useState<string | null>(null);
-    const [recordCountAfter, setRecordCountAfter] = useState<number | null>(null);
-    const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // ── sessions ──
+  const [sessions, setSessions] = useState<UploadSession[]>([]);
+  const [activeSession, setActiveSession] = useState<UploadSession | null>(null);
+  const [sessionSearch, setSessionSearch] = useState('');
 
-    const loadData = useCallback(async () => {
-        setPageLoading(true);
-        setPageError(null);
-        try {
-            await authService.init();
-            const adminInfo = authService.getAdminInfoFromCookie();
-            const superAdmin =
-                adminInfo?.tenant_id === 'platform' || adminInfo?.role === 'admin';
-            setIsSuperAdmin(superAdmin);
+  // ── view ──
+  const [view, setView] = useState<View>('list');
+  const [pageLoading, setPageLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
 
-            try {
-                const tenantData = await tenantService.listTenants();
-                setTenants(tenantData);
-                if (tenantData.length > 0) setIsSuperAdmin(true);
-            } catch {
-                /* tenant list may fail for non–platform users */
-            }
+  // ── new-session form ──
+  const [newDomain, setNewDomain] = useState('');
+  const [newSessionName, setNewSessionName] = useState('');
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [creating, setCreating] = useState(false);
 
-            const tId = selectedTenantId === 'ALL' ? undefined : selectedTenantId;
-            (window as unknown as { activeTenantId?: string }).activeTenantId = tId;
+  // ── file upload form (within a session) ──
+  const [pendingEntries, setPendingEntries] = useState<PendingEntry[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
 
-            const srcData = await sourceService.listSources(0, 100, tId);
-            setSources(srcData);
-            const nameMap: Record<string, string> = {};
-            srcData.forEach((s) => {
-                nameMap[s.id] = s.sourceName;
-            });
-            const runData = await ingestionRunService.listRuns(0, 50, nameMap, tId);
-            setRuns(runData);
-        } catch (err) {
-            setPageError(err instanceof Error ? err.message : 'Failed to load data');
-        } finally {
-            setPageLoading(false);
-        }
-    }, [selectedTenantId]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-    useEffect(() => {
-        void loadData();
-    }, [loadData]);
+  // ── load ──────────────────────────────────────────────────────────────────
 
-    const entityOptions = useMemo(() => {
-        const set = new Set<string>();
-        sources.forEach((s) => s.supportedEntities.forEach((e) => set.add(e)));
-        return Array.from(set).sort();
-    }, [sources]);
+  const loadSessions = useCallback(async (tid?: string | null) => {
+    try {
+      const data = await uploadSessionService.listSessions(tid ?? undefined);
+      setSessions(data);
+    } catch (e) {
+      setPageError(e instanceof Error ? e.message : 'Failed to load sessions');
+    }
+  }, []);
 
-    /** Same scope as Ingestion Runs table; optional entity filter only (not state — completed runs still appear). */
-    const runsForSelect = useMemo(() => {
-        if (!entityType) return runs;
-        return runs.filter((r) => {
-            const src = sources.find((s) => s.id === r.sourceId);
-            if (!src) return true;
-            if (!src.supportedEntities.length) return true;
-            return src.supportedEntities.includes(entityType);
-        });
-    }, [runs, sources, entityType]);
+  // Detect platform admin from cookie
+  useEffect(() => {
+    const info = authService.getAdminInfoFromCookie();
+    const superAdmin = info?.tenant_id === 'platform' || info?.role === 'admin';
+    setIsSuperAdmin(superAdmin);
+  }, []);
 
-    const buildPreviewFromFile = useCallback(async (f: File) => {
-        const ext = getFileExt(f.name);
-        const text = await f.text();
-        if (ext === 'json') {
-            setPreviewRows(buildPreviewFromJson(text, MAX_PREVIEW_ROWS));
-        } else {
-            setPreviewRows(buildPreviewFromCsv(text, MAX_PREVIEW_ROWS));
-        }
-    }, []);
+  // Reload sessions whenever the global active tenant changes
+  useEffect(() => {
+    setPageLoading(true);
+    loadSessions(activeTenantId).finally(() => setPageLoading(false));
+  }, [activeTenantId, loadSessions]);
 
-    const handleFileSelect = useCallback(
-        (f: File) => {
-            const ext = getFileExt(f.name);
-            if (!['csv', 'json'].includes(ext)) {
-                setErrors((prev) => ({
-                    ...prev,
-                    file: 'Use CSV or JSON (backend pipeline matches IngestionRuns).',
-                }));
-                return;
-            }
-            const mb = f.size / (1024 * 1024);
-            if (mb > MAX_FILE_MB) {
-                setErrors((prev) => ({
-                    ...prev,
-                    file: `File exceeds ${MAX_FILE_MB} MB limit.`,
-                }));
-                return;
-            }
-            if (f.size === 0) {
-                setErrors((prev) => ({ ...prev, file: 'File is empty.' }));
-                return;
-            }
-            setErrors((prev) => ({ ...prev, file: null, general: null }));
-            setFile(f);
-            setUploadStatus(null);
-            setUploadProgress(null);
-            setLastResult(null);
-            setPipelineState(null);
-            setRecordCountAfter(null);
-            void buildPreviewFromFile(f).catch(() => {
-                setPreviewRows(null);
-                setErrors((prev) => ({
-                    ...prev,
-                    file: 'Could not read file for preview.',
-                }));
-            });
+  // ── tenant filter ─────────────────────────────────────────────────────────
+  // NOTE: Tenant selection is now handled globally by TenantScopeBar in MainLayout.
+  //       activeTenantId from useTenantConfig() is the single source of truth.
+
+  // ── session select ────────────────────────────────────────────────────────
+
+  const openSession = async (s: UploadSession) => {
+    try {
+      const full = await uploadSessionService.getSession(s.session_id, activeTenantId ?? undefined);
+      setActiveSession(full);
+      setView('detail');
+      setPendingEntries([]);
+      setUploadError(null);
+      setUploadSuccess(false);
+    } catch (e) {
+      setPageError(e instanceof Error ? e.message : 'Failed to open session');
+    }
+  };
+
+  // ── new session ───────────────────────────────────────────────────────────
+
+  const validateSessionForm = () => {
+    const errs: Record<string, string> = {};
+    if (!newDomain.trim()) errs.domain = 'Domain is required';
+    if (!newSessionName.trim()) errs.sessionName = 'Session name is required';
+    else if (sessions.some(s => s.session_name.toLowerCase() === newSessionName.trim().toLowerCase()))
+      errs.sessionName = 'Session name already exists';
+    setFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
+  const handleCreateSession = async () => {
+    if (isSuperAdmin && !activeTenantId) {
+      setFormErrors({ general: 'Please select a tenant from the top dropdown first.' });
+      return;
+    }
+    if (!validateSessionForm()) return;
+    setCreating(true);
+    try {
+      const s = await uploadSessionService.createSession(
+        { 
+          session_name: newSessionName.trim(), 
+          domain: newDomain.trim(),
+          tenant_id: activeTenantId ?? undefined,
         },
-        [buildPreviewFromFile],
-    );
+        activeTenantId ?? undefined,
+      );
+      await loadSessions(activeTenantId);
+      setNewDomain('');
+      setNewSessionName('');
+      setFormErrors({});
+      setView('detail');
+      setActiveSession(s);
+      setPendingEntries([]);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Create failed';
+      setFormErrors(prev => ({ ...prev, general: msg }));
+    } finally {
+      setCreating(false);
+    }
+  };
 
-    const handleDrop = useCallback(
-        (e: DragEvent<HTMLDivElement>) => {
-            e.preventDefault();
-            setIsDragging(false);
-            const dropped = e.dataTransfer.files[0];
-            if (dropped) handleFileSelect(dropped);
-        },
-        [handleFileSelect],
-    );
+  // ── file picking ──────────────────────────────────────────────────────────
 
-    const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        setIsDragging(true);
-    };
+  const addFiles = useCallback(async (files: FileList | File[]) => {
+    const arr = Array.from(files);
+    const newEntries: PendingEntry[] = [];
+    const tooLarge: string[] = [];
 
-    const handleDragLeave = () => setIsDragging(false);
+    for (const f of arr) {
+      if (f.size > 100 * 1024 * 1024) {
+        tooLarge.push(f.name);
+        continue;
+      }
+      let previewCount: number | null = null;
+      if (f.name.toLowerCase().endsWith('.csv')) {
+        try { previewCount = countCsvRows(await f.text()); } catch { /* ok */ }
+      }
+      newEntries.push({ id: crypto.randomUUID(), file: f, label: f.name.replace(/\.[^.]+$/, ''), previewCount });
+    }
 
-    const handleJsonChange = (val: string) => {
-        setJsonPayload(val);
-        setJsonError('');
-        setLastResult(null);
-        setPipelineState(null);
-        setRecordCountAfter(null);
-        if (!val.trim()) {
-            setPreviewRows(null);
-            return;
-        }
-        try {
-            setPreviewRows(buildPreviewFromJson(val, MAX_PREVIEW_ROWS));
-        } catch {
-            setJsonError('Invalid JSON format');
-            setPreviewRows(null);
-        }
-    };
+    if (tooLarge.length > 0) {
+      setUploadError(`Skipped ${tooLarge.length} file(s) exceeding 100MB: ${tooLarge.join(', ')}`);
+    }
+    setPendingEntries(prev => [...prev, ...newEntries]);
+  }, []);
 
-    const validate = () => {
-        const errs: ErrorState = {};
-        if (!runId) errs.runId = 'Select an ingestion run';
-        if (inputMode === 'file' && !file) errs.file = 'Select a CSV or JSON file';
-        if (inputMode === 'json' && !jsonPayload.trim()) errs.json = 'Paste a JSON array or object';
-        if (inputMode === 'json' && jsonPayload.trim()) {
-            try {
-                JSON.parse(jsonPayload);
-            } catch {
-                errs.json = 'Invalid JSON format';
-            }
-        }
-        if (!pageLoading && runs.length === 0) {
-            errs.general =
-                'No ingestion runs loaded. Start a run from Ingestion Runs, or adjust tenant filter.';
-        } else if (!pageLoading && runsForSelect.length === 0 && runs.length > 0) {
-            errs.general = 'No runs match the entity filter; clear the filter or pick another entity.';
-        }
-        if (runId) {
-            const run = runs.find((r) => r.id === runId);
-            if (run && !UPLOADABLE_STATES.includes(run.state)) {
-                errs.runId = `This run is ${run.state}; uploads only work for Created or Running.`;
-            }
-        }
-        setErrors(errs);
-        return Object.keys(errs).length === 0;
-    };
+  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files.length) void addFiles(e.dataTransfer.files);
+  }, [addFiles]);
 
-    const handleUpload = async () => {
-        if (!validate()) return;
-        const run = runs.find((r) => r.id === runId);
-        if (!run) {
-            setErrors((e) => ({ ...e, runId: 'Run not found. Refresh the list.' }));
-            return;
-        }
-        if (!UPLOADABLE_STATES.includes(run.state)) {
-            setErrors((e) => ({
-                ...e,
-                runId: `Run is ${run.state}; uploads are only allowed for Created or Running.`,
-            }));
-            return;
-        }
+  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) void addFiles(e.target.files);
+    e.target.value = '';
+  };
 
-        const tenantHeader = isSuperAdmin ? run.tenantId : undefined;
+  const removeEntry = (id: string) => setPendingEntries(prev => prev.filter(p => p.id !== id));
+  const updateLabel = (id: string, label: string) =>
+    setPendingEntries(prev => prev.map(p => p.id === id ? { ...p, label } : p));
 
-        setUploadStatus('uploading');
-        setUploadProgress(5);
-        setErrors({});
-        setLastResult(null);
-        setPipelineState(null);
-        setRecordCountAfter(null);
+  // ── upload ────────────────────────────────────────────────────────────────
 
-        const progressTimer = window.setInterval(() => {
-            setUploadProgress((p) => (p == null || p >= 90 ? 90 : p + 8));
-        }, 220);
+  const handleUpload = async () => {
+    if (!activeSession || pendingEntries.length === 0) return;
+    const emptyLabel = pendingEntries.find(p => !p.label.trim());
+    if (emptyLabel) { setUploadError('All file labels are required.'); return; }
 
-        try {
-            let result: IngestionUploadResultData;
-            if (inputMode === 'file' && file) {
-                result = await uploadService.uploadToIngestionRun(runId, file, tenantHeader);
-            } else {
-                result = await uploadService.uploadJsonPayloadToRun(
-                    runId,
-                    jsonPayload,
-                    tenantHeader,
-                );
-            }
-            setUploadProgress(100);
-            setLastResult(result);
-            setUploadStatus('success');
+    setUploading(true);
+    setUploadError(null);
+    setUploadSuccess(false);
+    setUploadProgress(10);
 
-            /* Light poll — backend may process async (Celery) or sync */
-            let finalState = '';
-            let recCount: number | null = null;
-            for (let i = 0; i < 14; i++) {
-                await new Promise((r) => setTimeout(r, 1200));
-                const st = await ingestionRunService.getRunStatus(runId, tenantHeader);
-                finalState = st.state;
-                recCount = st.record_count;
-                if (['COMPLETED', 'FAILED'].includes(st.state)) break;
-            }
-            setPipelineState(finalState || null);
-            setRecordCountAfter(recCount);
-            void loadData();
-        } catch (err) {
-            setUploadStatus('error');
-            const msg =
-                err instanceof ApiError
-                    ? err.message
-                    : err instanceof Error
-                      ? err.message
-                      : 'Upload failed';
-            setErrors((e) => ({ ...e, general: msg }));
-        } finally {
-            window.clearInterval(progressTimer);
-            setUploadProgress(null);
-        }
-    };
+    const timer = window.setInterval(() => {
+      setUploadProgress(p => (p == null || p >= 85 ? 85 : p + 10));
+    }, 300);
 
-    const handleReset = () => {
-        setFile(null);
-        setJsonPayload('');
-        setPreviewRows(null);
-        setUploadStatus(null);
-        setUploadProgress(null);
-        setErrors({});
-        setJsonError('');
-        setRunId('');
-        setLastResult(null);
-        setPipelineState(null);
-        setRecordCountAfter(null);
-    };
+    try {
+      await uploadSessionService.uploadFiles(
+        activeSession.session_id,
+        pendingEntries.map(p => ({ file: p.file, label: p.label })),
+        activeTenantId ?? undefined,
+      );
+      setUploadProgress(100);
+      setUploadSuccess(true);
+      setPendingEntries([]);
+      // refresh session detail
+      const full = await uploadSessionService.getSession(activeSession.session_id, activeTenantId ?? undefined);
+      setActiveSession(full);
+      await loadSessions(activeTenantId);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Upload failed';
+      setUploadError(msg);
+    } finally {
+      clearInterval(timer);
+      setUploading(false);
+      setTimeout(() => setUploadProgress(null), 800);
+    }
+  };
 
-    const valid = previewRows ? previewRows.filter((r) => r.status === 'VALID').length : 0;
-    const errCount = previewRows ? previewRows.filter((r) => r.status === 'ERROR').length : 0;
-    const warnCount = previewRows ? previewRows.filter((r) => r.status === 'WARNING').length : 0;
+  const handleDeleteFile = async (file: UploadSessionFile) => {
+    if (!activeSession) return;
+    if (!window.confirm(`Remove "${file.file_label}"?`)) return;
+    try {
+      await uploadSessionService.deleteFile(activeSession.session_id, file.file_id, activeTenantId ?? undefined);
+      const full = await uploadSessionService.getSession(activeSession.session_id, activeTenantId ?? undefined);
+      setActiveSession(full);
+      await loadSessions(activeTenantId);
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : 'Delete failed');
+    }
+  };
 
+  // ── filtered sessions ─────────────────────────────────────────────────────
+
+  const filteredSessions = sessions.filter(s =>
+    sessionSearch === '' ||
+    s.session_name.toLowerCase().includes(sessionSearch.toLowerCase()) ||
+    s.domain.toLowerCase().includes(sessionSearch.toLowerCase())
+  );
+
+  // ── render ────────────────────────────────────────────────────────────────
+
+  if (pageLoading) {
     return (
-        <div className="ud-page">
-            <div className="ud-page-header">
-                <div>
-                    <h1 className="ud-page-title">Upload Data</h1>
-                    <p className="ud-page-subtitle">
-                        Upload CSV or JSON into an ingestion run (stored on disk; DB tracks file name
-                        and metadata via file_uploads)
-                    </p>
-                </div>
-                {uploadStatus === 'success' && (
-                    <button className="ud-btn ud-btn--ghost" onClick={handleReset} type="button">
-                        ↻ Upload Another
-                    </button>
-                )}
-            </div>
-
-            {pageError && (
-                <div
-                    className="ud-alert ud-alert--error"
-                    style={{ marginBottom: 16 }}
-                >
-                    <span>✕</span>
-                    <span>{pageError}</span>
-                </div>
-            )}
-
-            {errors.general && (
-                <div
-                    className="ud-alert ud-alert--error"
-                    style={{ marginBottom: 16 }}
-                >
-                    <span>✕</span>
-                    <span>{errors.general}</span>
-                </div>
-            )}
-
-            <div className="ud-layout">
-                <div className="ud-upload-card">
-                    <div className="ud-card-header">
-                        <h2 className="ud-card-title">Upload Configuration</h2>
-                        <p className="ud-card-subtitle">
-                            Choose tenant (if platform), an open run, then upload — same API as
-                            Ingestion Runs
-                        </p>
-                    </div>
-
-                    <div className="ud-card-body">
-                        {isSuperAdmin && tenants.length > 0 && (
-                            <div className="ud-field">
-                                <label className="ud-label">Tenant filter</label>
-                                <select
-                                    className="ud-select"
-                                    value={selectedTenantId}
-                                    onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                                        setSelectedTenantId(e.target.value);
-                                        setRunId('');
-                                    }}
-                                >
-                                    <option value="ALL">All tenants</option>
-                                    {tenants.map((t) => (
-                                        <option key={t.id} value={t.id}>
-                                            {t.tenantName}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-
-                        <div className={`ud-field${errors.runId ? ' ud-field--error' : ''}`}>
-                            <label className="ud-label">
-                                Ingestion Run <span className="ud-required">*</span>
-                            </label>
-                            <select
-                                className="ud-select"
-                                value={runId}
-                                disabled={pageLoading}
-                                onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-                                    setRunId(e.target.value)
-                                }
-                            >
-                                <option value="">
-                                    {pageLoading ? 'Loading runs…' : '— Select ingestion run —'}
-                                </option>
-                                {runsForSelect.map((r) => (
-                                    <option key={r.id} value={r.id}>
-                                        {runLabel(r)}
-                                    </option>
-                                ))}
-                            </select>
-                            {errors.runId && (
-                                <span className="ud-error-msg">{errors.runId}</span>
-                            )}
-                        </div>
-
-                        <div className="ud-field">
-                            <label className="ud-label">Entity filter (optional)</label>
-                            <select
-                                className="ud-select"
-                                value={entityType}
-                                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                                    setEntityType(e.target.value);
-                                    setRunId('');
-                                }}
-                            >
-                                <option value="">— All entities —</option>
-                                {entityOptions.map((e) => (
-                                    <option key={e} value={e}>
-                                        {e}
-                                    </option>
-                                ))}
-                            </select>
-                            <span
-                                style={{
-                                    fontSize: 12,
-                                    color: 'var(--text-muted)',
-                                    marginTop: 6,
-                                    display: 'block',
-                                }}
-                            >
-                                Narrows the run list to sources that declare this entity.
-                            </span>
-                        </div>
-
-                        <div className="ud-field">
-                            <label className="ud-label">Input Method</label>
-                            <div className="ud-mode-tabs">
-                                <button
-                                    className={`ud-mode-tab${inputMode === 'file' ? ' ud-mode-tab--active' : ''}`}
-                                    onClick={() => {
-                                        setInputMode('file');
-                                        setJsonPayload('');
-                                        setJsonError('');
-                                    }}
-                                    type="button"
-                                >
-                                    📁 File Upload
-                                </button>
-                                <button
-                                    className={`ud-mode-tab${inputMode === 'json' ? ' ud-mode-tab--active' : ''}`}
-                                    onClick={() => {
-                                        setInputMode('json');
-                                        setFile(null);
-                                        setPreviewRows(null);
-                                    }}
-                                    type="button"
-                                >
-                                    📋 Paste JSON
-                                </button>
-                            </div>
-                        </div>
-
-                        {inputMode === 'file' && (
-                            <div className="ud-field">
-                                {!file ? (
-                                    <div
-                                        className={`ud-dropzone${isDragging ? ' ud-dropzone--active' : ''}`}
-                                        onDrop={handleDrop}
-                                        onDragOver={handleDragOver}
-                                        onDragLeave={handleDragLeave}
-                                        onClick={() => fileInputRef.current?.click()}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter' || e.key === ' ')
-                                                fileInputRef.current?.click();
-                                        }}
-                                        role="button"
-                                        tabIndex={0}
-                                    >
-                                        <span className="ud-dropzone__icon">☁️</span>
-                                        <span className="ud-dropzone__label">
-                                            Drag & drop CSV or JSON here
-                                        </span>
-                                        <span className="ud-dropzone__sub">or click to browse</span>
-                                        <div className="ud-dropzone__formats">
-                                            <span className="ud-format-chip">CSV</span>
-                                            <span className="ud-format-chip">JSON</span>
-                                        </div>
-                                        <input
-                                            ref={fileInputRef}
-                                            type="file"
-                                            accept=".csv,.json"
-                                            style={{ display: 'none' }}
-                                            onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                                                const selected = e.target.files?.[0];
-                                                if (selected) handleFileSelect(selected);
-                                                e.target.value = '';
-                                            }}
-                                        />
-                                    </div>
-                                ) : (
-                                    <div className="ud-file-selected">
-                                        <span className="ud-file-icon">
-                                            {FORMAT_ICONS[getFileExt(file.name)] || FORMAT_ICONS.default}
-                                        </span>
-                                        <div className="ud-file-info">
-                                            <div className="ud-file-name">{file.name}</div>
-                                            <div className="ud-file-size">{formatBytes(file.size)}</div>
-                                        </div>
-                                        <button
-                                            className="ud-file-remove"
-                                            onClick={() => {
-                                                setFile(null);
-                                                setPreviewRows(null);
-                                                setUploadStatus(null);
-                                            }}
-                                            type="button"
-                                        >
-                                            ✕
-                                        </button>
-                                    </div>
-                                )}
-                                {errors.file && (
-                                    <span className="ud-error-msg">{errors.file}</span>
-                                )}
-                            </div>
-                        )}
-
-                        {inputMode === 'json' && (
-                            <div className={`ud-field${errors.json ? ' ud-field--error' : ''}`}>
-                                <label className="ud-label">JSON Payload</label>
-                                <textarea
-                                    className="ud-json-textarea"
-                                    placeholder={JSON_PLACEHOLDER}
-                                    value={jsonPayload}
-                                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
-                                        handleJsonChange(e.target.value)
-                                    }
-                                />
-                                {jsonError && (
-                                    <span className="ud-error-msg">{jsonError}</span>
-                                )}
-                                {errors.json && (
-                                    <span className="ud-error-msg">{errors.json}</span>
-                                )}
-                            </div>
-                        )}
-
-                        {uploadStatus === 'uploading' && (
-                            <div className="ud-progress-wrap">
-                                <div className="ud-progress-label">
-                                    <span>Uploading…</span>
-                                    <span>{uploadProgress ?? 0}%</span>
-                                </div>
-                                <div className="ud-progress-bar">
-                                    <div
-                                        className="ud-progress-fill"
-                                        style={{ width: `${uploadProgress ?? 0}%` }}
-                                    />
-                                </div>
-                            </div>
-                        )}
-
-                        {uploadStatus === 'success' && lastResult && (
-                            <div className="ud-alert ud-alert--success">
-                                <span>✓</span>
-                                <span>
-                                    Stored as <strong>{lastResult.filename ?? 'upload'}</strong> (
-                                    {formatBytes(lastResult.size_bytes)}
-                                    {lastResult.async_processing ? ', async processing' : ', processed inline'}
-                                    ).
-                                    {pipelineState && ` Run state: ${pipelineState}.`}
-                                    {recordCountAfter != null &&
-                                        ` Records in run: ${recordCountAfter}.`}
-                                </span>
-                            </div>
-                        )}
-                        {uploadStatus === 'error' && (
-                            <div className="ud-alert ud-alert--error">
-                                <span>✕</span>
-                                <span>Upload failed. See message above.</span>
-                            </div>
-                        )}
-                        {inputMode === 'file' && !file && !uploadStatus && (
-                            <div className="ud-alert ud-alert--info">
-                                <span>ℹ</span>
-                                <span>
-                                    Max {MAX_FILE_MB} MB per file (server limit). Original file name
-                                    is kept in the database; disk path uses a UUID prefix under
-                                    storage/uploads/&lt;run_id&gt;/.
-                                </span>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="ud-card-footer">
-                        <button
-                            className="ud-btn ud-btn--ghost"
-                            onClick={handleReset}
-                            type="button"
-                            disabled={uploadStatus === 'uploading'}
-                        >
-                            Reset
-                        </button>
-                        <button
-                            className="ud-btn ud-btn--primary"
-                            onClick={() => void handleUpload()}
-                            disabled={
-                                uploadStatus === 'uploading' ||
-                                uploadStatus === 'success' ||
-                                pageLoading
-                            }
-                            style={{
-                                opacity:
-                                    uploadStatus === 'uploading' || uploadStatus === 'success'
-                                        ? 0.55
-                                        : 1,
-                            }}
-                            type="button"
-                        >
-                            {uploadStatus === 'uploading' ? '⏳ Uploading…' : '⬆ Confirm Upload'}
-                        </button>
-                    </div>
-                </div>
-
-                <div className="ud-preview-card">
-                    <div className="ud-preview-toolbar">
-                        <div className="ud-preview-toolbar__left">
-                            <span className="ud-preview-title">Data Preview</span>
-                            {previewRows && (
-                                <span
-                                    className={`ud-preview-badge${errCount > 0 ? ' ud-preview-badge--error' : ' ud-preview-badge--valid'}`}
-                                >
-                                    {previewRows.length} rows (sample)
-                                </span>
-                            )}
-                        </div>
-                    </div>
-
-                    {!previewRows ? (
-                        <div className="ud-preview-empty">
-                            <span className="ud-preview-empty__icon">🗃</span>
-                            <span className="ud-preview-empty__title">No preview available</span>
-                            <span className="ud-preview-empty__sub">
-                                Select a CSV/JSON file or paste JSON — preview is parsed in the browser
-                                only.
-                            </span>
-                        </div>
-                    ) : (
-                        <>
-                            <div className="ud-preview-table-wrap">
-                                <table className="ud-preview-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Row #</th>
-                                            <th>Source Record ID</th>
-                                            <th>Payload Preview</th>
-                                            <th>Heuristic</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {previewRows.map((row) => (
-                                            <tr key={row.rowNum}>
-                                                <td>
-                                                    <span className="ud-row-num">#{row.rowNum}</span>
-                                                </td>
-                                                <td>
-                                                    <span className="ud-src-id">{row.srcId}</span>
-                                                </td>
-                                                <td>
-                                                    <code className="ud-payload-preview">
-                                                        {row.payload.length > 160
-                                                            ? `${row.payload.slice(0, 160)}…`
-                                                            : row.payload}
-                                                    </code>
-                                                </td>
-                                                <td>
-                                                    <span
-                                                        className={`ud-val-badge ud-val-badge--${row.status.toLowerCase()}`}
-                                                    >
-                                                        {row.status === 'VALID'
-                                                            ? '✓'
-                                                            : row.status === 'ERROR'
-                                                              ? '✕'
-                                                              : '⚠'}{' '}
-                                                        {row.status}
-                                                    </span>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                            <div className="ud-preview-footer">
-                                <div className="ud-preview-stats">
-                                    <span className="ud-preview-stat">
-                                        <span className="ud-preview-stat__dot ud-preview-stat__dot--total" />
-                                        {previewRows.length} Total
-                                    </span>
-                                    <span className="ud-preview-stat">
-                                        <span className="ud-preview-stat__dot ud-preview-stat__dot--valid" />
-                                        {valid} OK
-                                    </span>
-                                    {warnCount > 0 && (
-                                        <span className="ud-preview-stat">
-                                            <span
-                                                className="ud-preview-stat__dot"
-                                                style={{ background: 'var(--amber-500)' }}
-                                            />
-                                            {warnCount} Warning
-                                        </span>
-                                    )}
-                                    {errCount > 0 && (
-                                        <span className="ud-preview-stat">
-                                            <span className="ud-preview-stat__dot ud-preview-stat__dot--error" />
-                                            {errCount} Empty
-                                        </span>
-                                    )}
-                                </div>
-                            </div>
-                        </>
-                    )}
-                </div>
-            </div>
-        </div>
+      <div className="up-page">
+        <div className="up-spinner">⏳ Loading upload sessions…</div>
+      </div>
     );
+  }
+
+  return (
+    <div className="up-page">
+      {/* Header */}
+      <div className="up-header">
+        <div>
+          <h1 className="up-title">Upload Data</h1>
+          <p className="up-subtitle">
+            Organise files into named sessions (folders) before ingestion. Upload multiple files per session.
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {isSuperAdmin && activeTenantName && (
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--blue-600)', background: 'var(--blue-100)', padding: '4px 10px', borderRadius: 99, border: '1px solid var(--blue-200)' }}>
+              🏢 {activeTenantName}
+            </span>
+          )}
+          <button
+            className="up-btn up-btn--primary"
+            onClick={() => { setView('newSession'); setFormErrors({}); setNewDomain(''); setNewSessionName(''); }}
+            type="button"
+          >
+            + New Session
+          </button>
+        </div>
+      </div>
+
+      {pageError && (
+        <div className="up-alert up-alert--error">
+          <span>✕</span><span>{pageError}</span>
+        </div>
+      )}
+
+      {/* Main layout */}
+      <div className="up-layout">
+        {/* LEFT — session browser */}
+        <div className="up-card">
+          <div className="up-browser__toolbar up-card__head">
+            <span className="up-browser__title">📁 Sessions ({filteredSessions.length})</span>
+            <input
+              className="up-browser__search"
+              placeholder="Search…"
+              value={sessionSearch}
+              onChange={e => setSessionSearch(e.target.value)}
+            />
+          </div>
+          {filteredSessions.length === 0 ? (
+            <div className="up-empty" style={{ padding: 40 }}>
+              <span className="up-empty__icon">📂</span>
+              <span className="up-empty__title">No sessions yet</span>
+              <span className="up-empty__sub">Click "New Session" to create a named upload folder.</span>
+            </div>
+          ) : (
+            <div className="up-session-list">
+              {filteredSessions.map(s => (
+                <div
+                  key={s.session_id}
+                  className={`up-session-row${activeSession?.session_id === s.session_id && view === 'detail' ? ' up-session-row--active' : ''}`}
+                  onClick={() => void openSession(s)}
+                >
+                  <div className="up-session-row__left">
+                    <span className="up-session-icon">📁</span>
+                    <div>
+                      <div className="up-session-name">{s.session_name}</div>
+                      <div className="up-session-domain">{s.domain}</div>
+                    </div>
+                  </div>
+                  <div className="up-session-row__right">
+                    <span className="up-session-count">{s.file_count} file{s.file_count !== 1 ? 's' : ''}</span>
+                    <span className={`up-session-status up-session-status--${s.status.toLowerCase()}`}>
+                      {s.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT — new session form or session detail */}
+        <div className="up-card">
+          {view === 'newSession' && (
+            <>
+              <div className="up-card__head">
+                <div className="up-card__title">Create New Session</div>
+                <div className="up-card__sub">A session is a named folder that groups related uploads.</div>
+              </div>
+              <div className="up-card__body">
+                {formErrors.general && (
+                  <div className="up-alert up-alert--error"><span>✕</span><span>{formErrors.general}</span></div>
+                )}
+                <div className={`up-field${formErrors.domain ? ' up-field--error' : ''}`}>
+                  <label className="up-label">Domain <span className="up-required">*</span></label>
+                  <input
+                    className="up-input"
+                    placeholder="e.g. Student, Finance, HR"
+                    value={newDomain}
+                    onChange={e => setNewDomain(e.target.value)}
+                  />
+                  {formErrors.domain && <span className="up-error-msg">{formErrors.domain}</span>}
+                </div>
+                <div className={`up-field${formErrors.sessionName ? ' up-field--error' : ''}`}>
+                  <label className="up-label">Session Name <span className="up-required">*</span></label>
+                  <input
+                    className="up-input"
+                    placeholder="e.g. StudentDataUploadSession1"
+                    value={newSessionName}
+                    onChange={e => setNewSessionName(e.target.value)}
+                  />
+                  {formErrors.sessionName && <span className="up-error-msg">{formErrors.sessionName}</span>}
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    Must be unique within your tenant.
+                  </span>
+                </div>
+                <div className="up-alert up-alert--info">
+                  <span>ℹ</span>
+                  <span>
+                    <strong>Example:</strong> Domain = Student, Session = StudentDataUploadSession1. You can then upload multiple files (Student Data Set1, Student Data Set2 Master, Courses Master) inside it.
+                  </span>
+                </div>
+              </div>
+              <div className="up-card__foot">
+                <button className="up-btn up-btn--ghost" onClick={() => setView('list')} type="button">Cancel</button>
+                <button className="up-btn up-btn--primary" onClick={() => void handleCreateSession()} disabled={creating} type="button">
+                  {creating ? '⏳ Creating…' : '✓ Create Session'}
+                </button>
+              </div>
+            </>
+          )}
+
+          {view === 'list' && (
+            <div className="up-empty">
+              <span className="up-empty__icon">👈</span>
+              <span className="up-empty__title">Select a session</span>
+              <span className="up-empty__sub">Choose a session from the left panel, or create a new one.</span>
+            </div>
+          )}
+
+          {view === 'detail' && activeSession && (
+            <>
+              <div className="up-card__head">
+                <div className="up-detail__header">
+                  <span className="up-detail__folder">📁</span>
+                  <div>
+                    <div className="up-detail__name">{activeSession.session_name}</div>
+                    <div className="up-detail__domain">{activeSession.domain}</div>
+                    <div className="up-detail__meta">
+                      <span className="up-detail__chip">
+                        {activeSession.file_count} file{activeSession.file_count !== 1 ? 's' : ''}
+                      </span>
+                      <span className={`up-session-status up-session-status--${activeSession.status.toLowerCase()}`}>
+                        {activeSession.status}
+                      </span>
+                      <span className="up-detail__chip">Created {fmtDate(activeSession.created_at)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="up-card__body">
+                {/* Existing files table */}
+                {(activeSession.files?.length ?? 0) > 0 && (
+                  <div className="up-files-table-wrap">
+                    <table className="up-files-table">
+                      <thead>
+                        <tr>
+                          <th>File Label</th>
+                          <th>Original Filename</th>
+                          <th>Records</th>
+                          <th>Size</th>
+                          <th>Who Uploaded</th>
+                          <th>When was it</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {activeSession.files!.map(f => (
+                          <tr key={f.file_id}>
+                            <td><strong>{f.file_label}</strong></td>
+                            <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono,monospace)', fontSize: 11 }}>
+                              {f.original_filename}
+                            </td>
+                            <td>
+                              {f.record_count != null
+                                ? <span className="up-rec-badge">{f.record_count.toLocaleString()} rows</span>
+                                : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                            </td>
+                            <td>{f.file_size_bytes != null ? fmtBytes(f.file_size_bytes) : '—'}</td>
+                            <td>
+                              <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                                {f.uploaded_by || 'Unknown'}
+                              </span>
+                            </td>
+                            <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                              {fmtFriendlyDate(f.uploaded_at)}
+                            </td>
+                            <td>
+                              <button
+                                className="up-btn up-btn--danger up-btn--sm"
+                                onClick={() => void handleDeleteFile(f)}
+                                type="button"
+                              >✕</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Upload new files */}
+                {activeSession.status === 'OPEN' && (
+                  <>
+                    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+                      <div className="up-card__title" style={{ marginBottom: 10 }}>Add Files to Session</div>
+
+                      {/* Dropzone */}
+                      {pendingEntries.length === 0 && (
+                        <div
+                          className={`up-dropzone${isDragging ? ' up-dropzone--active' : ''}`}
+                          onDrop={handleDrop}
+                          onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+                          onDragLeave={() => setIsDragging(false)}
+                          onClick={() => fileInputRef.current?.click()}
+                          role="button" tabIndex={0}
+                          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click(); }}
+                        >
+                          <span className="up-dropzone__icon">☁️</span>
+                          <span className="up-dropzone__label">Drag &amp; drop CSV/JSON files here</span>
+                          <span className="up-dropzone__sub">or click to browse — multiple files supported</span>
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept=".csv,.json"
+                            multiple
+                            style={{ display: 'none' }}
+                            onChange={handleInputChange}
+                          />
+                        </div>
+                      )}
+
+                      {/* Pending entries */}
+                      {pendingEntries.length > 0 && (
+                        <>
+                          <div className="up-file-entries">
+                            {pendingEntries.map(entry => (
+                              <div key={entry.id} className="up-file-entry">
+                                <div className="up-field">
+                                  <label className="up-label">File Name (Label) <span className="up-required">*</span></label>
+                                  <input
+                                    className="up-input"
+                                    value={entry.label}
+                                    onChange={e => updateLabel(entry.id, e.target.value)}
+                                    placeholder="e.g. Student Data Set1"
+                                  />
+                                </div>
+                                <div className="up-field">
+                                  <label className="up-label">Original File</label>
+                                  <input className="up-input" value={entry.file.name} readOnly style={{ opacity: .7 }} />
+                                </div>
+                                <button className="up-file-entry__remove" onClick={() => removeEntry(entry.id)} type="button">✕</button>
+                                <div className="up-file-entry__meta">
+                                  <span>📄 {fmtBytes(entry.file.size)}</span>
+                                  {entry.previewCount != null && (
+                                    <span className="up-file-entry__badge">~{entry.previewCount.toLocaleString()} rows</span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="up-add-row" style={{ marginTop: 8 }}>
+                            <button
+                              className="up-btn up-btn--ghost up-btn--sm"
+                              onClick={() => fileInputRef.current?.click()}
+                              type="button"
+                            >+ Add more files</button>
+                            <input
+                              ref={fileInputRef}
+                              type="file" accept=".csv,.json" multiple
+                              style={{ display: 'none' }}
+                              onChange={handleInputChange}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {uploadError && (
+                      <div className="up-alert up-alert--error"><span>✕</span><span>{uploadError}</span></div>
+                    )}
+                    {uploadSuccess && (
+                      <div className="up-alert up-alert--success"><span>✓</span><span>Files uploaded successfully.</span></div>
+                    )}
+                    {uploadProgress != null && (
+                      <div className="up-progress">
+                        <div className="up-progress__label"><span>Uploading…</span><span>{uploadProgress}%</span></div>
+                        <div className="up-progress__track">
+                          <div className="up-progress__fill" style={{ width: `${uploadProgress}%` }} />
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {activeSession.status === 'OPEN' && pendingEntries.length > 0 && (
+                <div className="up-card__foot">
+                  <button className="up-btn up-btn--ghost" onClick={() => setPendingEntries([])} disabled={uploading} type="button">Clear</button>
+                  <button className="up-btn up-btn--primary" onClick={() => void handleUpload()} disabled={uploading || pendingEntries.length === 0} type="button">
+                    {uploading ? '⏳ Uploading…' : `⬆ Upload ${pendingEntries.length} File${pendingEntries.length !== 1 ? 's' : ''}`}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from signalmdm.models.file_upload   import FileUpload
     from signalmdm.models.raw_record    import RawRecord
     from signalmdm.models.staging_entity import StagingEntity
+    from signalmdm.models.upload_session import UploadSession, UploadSessionFile
 
 
 class Tenant(Base):
@@ -94,6 +95,7 @@ class Tenant(Base):
     file_uploads:     Mapped[list["FileUpload"]]     = relationship(back_populates="tenant")
     raw_records:      Mapped[list["RawRecord"]]      = relationship(back_populates="tenant")
     staging_entities: Mapped[list["StagingEntity"]]  = relationship(back_populates="tenant")
+    upload_sessions:  Mapped[list["UploadSession"]]  = relationship(back_populates="tenant")
 
     def __repr__(self) -> str:
         return f"<Tenant code={self.tenant_code!r} status={self.status!r}>"
