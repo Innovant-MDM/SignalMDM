@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import '../../styles/theme.css';
 import '../../styles/PlatformRBAC.css';
 import { platformRbacService, type PlatformRole, type PlatformPermission, type PlatformUser, type CreateUserPayload } from '../../services/platformRbacService';
+import { usePermissions } from '../../context/PermissionsContext';
 
 type Tab = 'users' | 'roles';
 
@@ -320,6 +321,7 @@ function UsersTab({ roles }: { roles: PlatformRole[] }) {
 
 /* ─── Roles & Permissions Tab ─────────────────────────────── */
 function RolesTab() {
+  const { refreshPermissions } = usePermissions();
   const [roles, setRoles]                   = useState<PlatformRole[]>([]);
   const [allPerms, setAllPerms]             = useState<PlatformPermission[]>([]);
   const [selectedRole, setSelectedRole]     = useState<PlatformRole | null>(null);
@@ -359,6 +361,7 @@ function RolesTab() {
     setSaving(true);
     try {
       await platformRbacService.setRolePermissions(selectedRole.role_id, Array.from(rolePerms));
+      await refreshPermissions();
       alert('Permissions saved successfully.');
     } catch (err) { alert(err instanceof Error ? err.message : 'Failed to save permissions.'); }
     finally { setSaving(false); }

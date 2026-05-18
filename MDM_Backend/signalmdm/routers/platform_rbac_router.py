@@ -53,6 +53,37 @@ def _admin_required(auth: TokenPayload = Depends(require_auth)) -> TokenPayload:
     return auth
 
 
+# ─── My permissions (current session) ────────────────────────
+
+@router.get("/my-permissions")
+def my_permissions(
+    auth: TokenPayload = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Return the screen_key → [feature_key, ...] map for the calling admin.
+    Non-platform admins get an empty map (they are tenant-scoped).
+    """
+    if auth.tenant_id != "platform":
+        return {"permissions": {}}
+
+    import uuid as _uuid
+    from signalmdm.models.platform_admin import PlatformAdmin
+    admin = db.query(PlatformAdmin).filter(
+        PlatformAdmin.admin_id == _uuid.UUID(auth.user_id)
+    ).first()
+
+    if not admin or not admin.role_id:
+        return {"permissions": {}}
+
+    perms = svc.get_role_permissions(db, admin.role_id)
+    perm_map: dict[str, list[str]] = {}
+    for p in perms:
+        perm_map.setdefault(p.screen_key, []).append(p.feature_key)
+
+    return {"permissions": perm_map}
+
+
 # ─── Roles ────────────────────────────────────────────────────
 
 @router.get("/roles", response_model=List[RoleRead])

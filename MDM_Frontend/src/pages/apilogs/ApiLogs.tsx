@@ -97,7 +97,7 @@ function LogDrawer({ record, onClose, initialTab = 'overview' }: LogDrawerProps)
     const activeJson = tab === 'before' ? oldJson : newJson;
 
     const copyPayload = (obj: JsonObject) => {
-        void navigator.clipboard.writeText(JSON.stringify(obj, null, 2)).catch(() => {});
+        void navigator.clipboard.writeText(JSON.stringify(obj, null, 2)).catch(() => { });
         setCopied(true);
         setTimeout(() => setCopied(false), 1800);
     };

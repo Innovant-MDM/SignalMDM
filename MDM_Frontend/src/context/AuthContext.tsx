@@ -20,6 +20,8 @@ import {
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authService, type AdminProfile } from '../services/authService';
+import { evictPermissionsCache } from './PermissionsContext';
+import { tenantConfigService } from '../services/tenantConfigService';
 
 // ─── Context shape ────────────────────────────────────────────────────────
 
@@ -63,6 +65,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     await authService.logout();
+    evictPermissionsCache();
+    tenantConfigService.clearCache();
     setAdmin(null);
     navigate('/login', { replace: true });
   }, [navigate]);

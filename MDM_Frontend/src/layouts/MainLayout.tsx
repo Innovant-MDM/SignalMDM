@@ -1,42 +1,43 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { usePermissions } from '../context/PermissionsContext';
 import TenantScopeBar from '../components/TenantScopeBar';
 import './MainLayout.css';
 
-
-interface NavItem  { label: string; path: string; icon: string; roles: string[]; }
-interface NavGroup { group: string; items: NavItem[]; }
+interface NavItem  { label: string; path: string; icon: string; screen: string; superAdminOnly?: boolean; }
+interface NavGroup { group: string; items: NavItem[]; platformOnly?: boolean; }
 
 const NAV: NavGroup[] = [
   {
     group: 'Main',
     items: [
-      { label: 'Dashboard',       path: '/',            icon: '⊞', roles: ['super_admin','admin','data_architect','data_manager','executive'] },
+      { label: 'Dashboard',       path: '/',            icon: '⊞', screen: 'dashboard' },
     ],
   },
   {
     group: 'Foundation',
     items: [
-      { label: 'Source Systems',  path: '/sources',     icon: '⬡', roles: ['super_admin','admin','data_architect'] },
-      { label: 'Upload Data',     path: '/upload',      icon: '⬆', roles: ['super_admin','admin','data_architect'] },
-      { label: 'Ingestion Runs',  path: '/ingestion',   icon: '↻', roles: ['super_admin','admin','data_architect','data_manager'] },
-      { label: 'Raw Landing',     path: '/raw-landing', icon: '⬇', roles: ['super_admin','admin','data_architect','data_manager'] },
-      { label: 'Staging Records', path: '/staging',     icon: '◫', roles: ['super_admin','admin','data_architect','data_manager'] },
+      { label: 'Source Systems',  path: '/sources',     icon: '⬡', screen: 'sources' },
+      { label: 'Upload Data',     path: '/upload',      icon: '⬆', screen: 'upload' },
+      { label: 'Ingestion Runs',  path: '/ingestion',   icon: '↻', screen: 'ingestion' },
+      { label: 'Raw Landing',     path: '/raw-landing', icon: '⬇', screen: 'raw_landing' },
+      { label: 'Staging Records', path: '/staging',     icon: '◫', screen: 'staging' },
     ],
   },
   {
     group: 'Admin',
     items: [
-      { label: 'API Logs',        path: '/api-logs',      icon: '≡', roles: ['super_admin','admin'] },
-      { label: 'System Health',   path: '/system-health', icon: '♥', roles: ['super_admin','admin'] },
+      { label: 'API Logs',        path: '/api-logs',      icon: '≡', screen: 'api_logs' },
+      { label: 'System Health',   path: '/system-health', icon: '♥', screen: 'system_health' },
     ],
   },
   {
     group: 'Platform',
+    platformOnly: true,
     items: [
-      { label: 'Tenants',         path: '/tenants',        icon: '🏢', roles: ['super_admin','admin'] },
-      { label: 'Platform Users',  path: '/platform-rbac',  icon: '👥', roles: ['super_admin','admin'] },
+      { label: 'Tenants',        path: '/tenants',       icon: '🏢', screen: 'platform' },
+      { label: 'Platform Users', path: '/platform-rbac', icon: '👥', screen: 'platform', superAdminOnly: true },
     ],
   },
 ];
@@ -44,6 +45,7 @@ const NAV: NavGroup[] = [
 export default function MainLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const { admin, isLoading, logout } = useAuth();
+  const { canAccess } = usePermissions();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -51,23 +53,22 @@ export default function MainLayout() {
     navigate('/login', { replace: true });
   };
 
-  // Derive initials from username or email
   const initials = admin
     ? (admin.username ?? admin.email).slice(0, 2).toUpperCase()
     : '??';
 
-  // Determine role — platform admins get full nav based on their role_key
-  const userRole    = admin?.role ?? 'executive';
   const isPlatform  = admin?.tenant_id === 'platform';
+  const isSuperAdmin = admin?.role === 'super_admin';
 
   const visibleNav = NAV.map(group => {
-    // Platform group is only for platform tenant users
-    if (group.group === 'Platform' && !isPlatform) {
-      return { ...group, items: [] };
-    }
+    // Platform group: platform admins only
+    if (group.platformOnly && !isPlatform) return { ...group, items: [] };
     return {
       ...group,
-      items: group.items.filter(item => item.roles.includes(userRole)),
+      items: group.items.filter(item => {
+        if (item.superAdminOnly && !isSuperAdmin) return false;
+        return canAccess(item.screen, 'view');
+      }),
     };
   }).filter(group => group.items.length > 0);
 

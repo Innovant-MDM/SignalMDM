@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, ProtectedRoute } from './context/AuthContext';
 import { TenantConfigProvider } from './context/TenantConfigContext';
+import { PermissionsProvider } from './context/PermissionsContext';
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
 import SourceSystems from './pages/source/SourceSystems';
@@ -45,23 +46,32 @@ export default function App() {
             element={
               <ProtectedRoute allowedRoles={['super_admin', 'admin', 'data_architect', 'data_manager', 'executive']}>
                 <TenantConfigProvider>
-                  <MainLayout />
+                  <PermissionsProvider>
+                    <MainLayout />
+                  </PermissionsProvider>
                 </TenantConfigProvider>
               </ProtectedRoute>
             }
           >
             <Route index element={<Placeholder title="Dashboard — Coming Soon" />} />
-            <Route path="sources"      element={<SourceSystems />} />
-            <Route path="ingestion"    element={<IngestionRuns />} />
-            <Route path="upload"       element={<UploadData />} />
-            <Route path="raw-landing"  element={<RawLanding />} />
-            <Route path="staging"      element={<StagingRecords />} />
-            <Route path="tenants"        element={<Tenants />} />
-            <Route path="api-logs"       element={<ApiLogs />} />
-            <Route path="system-health"  element={<SystemHealth />} />
-            <Route path="dev-setup"      element={<DevSetup />} />
-            <Route path="platform-rbac" element={<PlatformRBAC />} />
-            <Route path="*"              element={<Navigate to="/" replace />} />
+            <Route path="sources" element={<SourceSystems />} />
+            <Route path="ingestion" element={<IngestionRuns />} />
+            <Route path="upload" element={<UploadData />} />
+            <Route path="raw-landing" element={<RawLanding />} />
+            <Route path="staging" element={<StagingRecords />} />
+            <Route path="tenants" element={<Tenants />} />
+            <Route path="api-logs" element={<ApiLogs />} />
+            <Route path="system-health" element={<SystemHealth />} />
+            <Route path="dev-setup" element={<DevSetup />} />
+            <Route
+              path="platform-rbac"
+              element={
+                <ProtectedRoute allowedRoles={['super_admin']}>
+                  <PlatformRBAC />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
 
           {/* ── Catch-all ── */}
