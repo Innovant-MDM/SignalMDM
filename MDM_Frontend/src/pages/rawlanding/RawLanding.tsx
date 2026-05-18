@@ -7,13 +7,19 @@ import {
     type ChangeEvent,
     type MouseEvent,
 } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 
+import IngestionRunLineagePicker from '../../components/ingestion/IngestionRunLineagePicker';
+import { formatRunOptionLabel, resolveInitialRunId } from '../../utils/ingestionRunScope';
 import '../../styles/theme.css';
 import '../../styles/RawLanding.css';
 
 
 import { sourceService, ENTITY_TYPES, type SourceRecord } from '../../services/sourceService';
-import { ingestionRunService, type IngestionRunRecord } from '../../services/ingestionRunService';
+import {
+    ingestionRunService,
+    type IngestionLineageRunSummary,
+} from '../../services/ingestionRunService';
 import { useTenantConfig } from '../../context/TenantConfigContext';
 import {
     rawLandingService,
@@ -186,11 +192,13 @@ function PayloadModal({ record, onClose, initialTab = 'payload' }: PayloadModalP
 }
 
 export default function RawLanding() {
+    const [searchParams, setSearchParams] = useSearchParams();
+    const runIdFromUrl = searchParams.get('runId');
     const { activeTenantId } = useTenantConfig();
     const [records, setRecords] = useState<RawLandingRecord[]>([]);
     const [totalApi, setTotalApi] = useState(0);
     const [sources, setSources] = useState<SourceRecord[]>([]);
-    const [runs, setRuns] = useState<IngestionRunRecord[]>([]);
+    const [lineage, setLineage] = useState<IngestionLineageRunSummary[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -199,7 +207,7 @@ export default function RawLanding() {
     const [filterSource, setFilterSource] = useState<string>('ALL');
     const [filterEntity, setFilterEntity] = useState<string>('ALL');
     const [filterStatus, setFilterStatus] = useState<string>('ALL');
-    const [filterRun, setFilterRun] = useState<string>('ALL');
+    const [filterRun, setFilterRun] = useState<string>(runIdFromUrl || 'ALL');
     const [viewRecord, setViewRecord] = useState<RawLandingRecord | null>(null);
     const [viewTab, setViewTab] = useState<ModalTab>('payload');
     const [page, setPage] = useState(1);
@@ -209,6 +217,34 @@ export default function RawLanding() {
         return () => window.clearTimeout(t);
     }, [searchInput]);
 
+    useEffect(() => {
+        if (runIdFromUrl) {
+            setFilterRun(runIdFromUrl);
+            return;
+        }
+        if (lineage.length === 0) return;
+        const def = resolveInitialRunId(null, lineage, 'raw');
+        if (def !== 'ALL') {
+            setFilterRun(def);
+            setSearchParams({ runId: def }, { replace: true });
+        }
+    }, [runIdFromUrl, lineage, setSearchParams]);
+
+    const selectRun = useCallback(
+        (runId: string) => {
+            setFilterRun(runId);
+            setPage(1);
+            if (runId === 'ALL') setSearchParams({});
+            else setSearchParams({ runId });
+        },
+        [setSearchParams],
+    );
+
+    const activeLineage = useMemo(
+        () => (filterRun !== 'ALL' ? lineage.find((l) => l.run_id === filterRun) : null),
+        [filterRun, lineage],
+    );
+
     const loadData = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -217,17 +253,22 @@ export default function RawLanding() {
 
             const srcData = await sourceService.listSources(0, 100, tId);
             setSources(srcData);
-            const nameMap: Record<string, string> = {};
-            srcData.forEach((s) => { nameMap[s.id] = s.sourceName; });
-            const runData = await ingestionRunService.listRuns(0, 80, nameMap, tId);
-            setRuns(runData);
+            const lineageData = await ingestionRunService.fetchLineageSummary(tId, 50).catch(() => []);
+            setLineage(lineageData);
+
+            if (filterRun === 'ALL') {
+                setRecords([]);
+                setTotalApi(0);
+                return;
+            }
 
             const res = await rawLandingService.listRecords({
                 skip: 0,
                 limit: 500,
                 tenantId: tId,
-                runId: filterRun === 'ALL' ? undefined : filterRun,
+                runId: filterRun,
                 sourceSystemId: filterSource === 'ALL' ? undefined : filterSource,
+                entityType: filterEntity === 'ALL' ? undefined : filterEntity,
                 search: debouncedSearch.trim() || undefined,
             });
             setRecords(res.items.map(toRawLandingRecord));
@@ -240,11 +281,30 @@ export default function RawLanding() {
         } finally {
             setLoading(false);
         }
-    }, [activeTenantId, filterRun, filterSource, debouncedSearch]);
+    }, [activeTenantId, filterRun, filterSource, filterEntity, debouncedSearch]);
 
     useEffect(() => {
         void loadData();
     }, [loadData]);
+
+    const handleDeleteRun = useCallback(
+        async (runId: string) => {
+            try {
+                const tId = activeTenantId ?? undefined;
+                await ingestionRunService.deleteRun(runId, tId);
+                if (filterRun === runId) {
+                    selectRun('ALL');
+                }
+                await loadData();
+            } catch (err) {
+                const msg =
+                    err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Delete failed';
+                setError(msg);
+                throw err;
+            }
+        },
+        [activeTenantId, filterRun, selectRun, loadData],
+    );
 
     const filtered = useMemo(() => {
         return records.filter((r) => {
@@ -286,7 +346,7 @@ export default function RawLanding() {
                 <div>
                     <h1 className="rl-page-title">Raw Landing</h1>
                     <p className="rl-page-subtitle">
-                        Raw records as stored after ingestion (up to 500 loaded; filters refine this set)
+                        Raw records are scoped per ingestion run — pick a run below (two runs = two separate batches)
                     </p>
                 </div>
                 <div className="rl-page-header__actions">
@@ -304,6 +364,31 @@ export default function RawLanding() {
                 </div>
             </div>
 
+            <IngestionRunLineagePicker
+                lineage={lineage}
+                activeRunId={filterRun}
+                onSelectRun={selectRun}
+                onDeleteRun={handleDeleteRun}
+                screen="raw"
+                loading={loading}
+            />
+
+            {filterRun !== 'ALL' && activeLineage && (
+                <div className="rl-run-banner">
+                    <div>
+                        <strong>Run {filterRun.slice(0, 8)}…</strong>
+                        <span className="rl-run-banner__meta">
+                            Entity {activeLineage.entity_type || '—'} · Raw {activeLineage.raw_record_count} → Staging{' '}
+                            {activeLineage.staging_record_count}
+                            {activeLineage.counts_aligned ? ' (1:1 when complete)' : ` — ${activeLineage.pipeline_note}`}
+                        </span>
+                    </div>
+                    <Link to={`/staging?runId=${encodeURIComponent(filterRun)}`} className="rl-btn rl-btn--ghost">
+                        View staging →
+                    </Link>
+                </div>
+            )}
+
             {error && (
                 <div
                     style={{
@@ -318,10 +403,19 @@ export default function RawLanding() {
                 </div>
             )}
 
-            <div className="rl-summary-row">
+            {filterRun === 'ALL' ? (
+                <div className="rl-table-card rl-lineage-empty-card">
+                    <p className="rl-lineage-empty-card__text">
+                        Select an ingestion run in the table above. Raw Landing does not mix rows from different runs —
+                        each run is one batch with its own entity and counts.
+                    </p>
+                </div>
+            ) : (
+            <>
+                        <div className="rl-summary-row">
                 <div className="rl-summary-card">
                     <span className="rl-summary-card__value">{totalApi}</span>
-                    <span className="rl-summary-card__label">Total (server match)</span>
+                    <span className="rl-summary-card__label">Total (this run)</span>
                 </div>
                 <div className="rl-summary-card">
                     <span className="rl-summary-card__value">{records.length}</span>
@@ -409,14 +503,13 @@ export default function RawLanding() {
                             className="rl-select"
                             value={filterRun}
                             onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                                setFilterRun(e.target.value);
-                                setPage(1);
+                                selectRun(e.target.value);
                             }}
                         >
-                            <option value="ALL">All Runs</option>
-                            {runs.map((r) => (
-                                <option key={r.id} value={r.id}>
-                                    {r.id.slice(0, 8)}… — {r.sourceName}
+                            <option value="ALL">Overview (no records)</option>
+                            {lineage.map((row) => (
+                                <option key={row.run_id} value={row.run_id}>
+                                    {formatRunOptionLabel(row)}
                                 </option>
                             ))}
                         </select>
@@ -570,6 +663,9 @@ export default function RawLanding() {
                     </div>
                 </div>
             </div>
+
+            </>
+            )}
 
             {viewRecord && (
                 <PayloadModal record={viewRecord} onClose={() => setViewRecord(null)} initialTab={viewTab} />

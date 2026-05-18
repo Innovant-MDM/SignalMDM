@@ -28,6 +28,8 @@ export interface RawRecordListRead {
   checksum_md5: string;
   created_at: string;
   processing_status: RawProcessingStatus;
+  ingestion_entity_type: string | null;
+  run_type: string | null;
   entity_display: string;
   has_staging: boolean;
   mapped_entity_type: string | null;
@@ -46,6 +48,8 @@ export interface RawLandingRecord {
   id: string;
   srcId: string;
   entity: string;
+  ingestionEntity: string | null;
+  runType: string | null;
   source: string;
   runShort: string;
   runId: string;
@@ -54,6 +58,7 @@ export interface RawLandingRecord {
   payload: Record<string, string | number | boolean | null>;
   checksum: string;
   ingestionRunState: string;
+  hasStaging: boolean;
 }
 
 function asPayload(data: Record<string, unknown>): Record<string, string | number | boolean | null> {
@@ -75,7 +80,9 @@ export function toRawLandingRecord(r: RawRecordListRead): RawLandingRecord {
   return {
     id: r.raw_record_id,
     srcId: r.source_record_id,
-    entity: r.entity_display,
+    entity: r.ingestion_entity_type || r.entity_display,
+    ingestionEntity: r.ingestion_entity_type,
+    runType: r.run_type,
     source: r.source_name,
     runShort: `${r.run_id.slice(0, 8)}…`,
     runId: r.run_id,
@@ -84,6 +91,7 @@ export function toRawLandingRecord(r: RawRecordListRead): RawLandingRecord {
     payload: asPayload(r.raw_data),
     checksum: r.checksum_md5,
     ingestionRunState: r.ingestion_run_state,
+    hasStaging: r.has_staging,
   };
 }
 
@@ -97,6 +105,8 @@ export const rawLandingService = {
     tenantId?: string;
     runId?: string;
     sourceSystemId?: string;
+    entityType?: string;
+    excludeDuplicates?: boolean;
     search?: string;
   }): Promise<RawLandingListResponse> {
     const q = new URLSearchParams();
@@ -104,6 +114,8 @@ export const rawLandingService = {
     if (params.limit != null) q.set('limit', String(params.limit));
     if (params.runId) q.set('run_id', params.runId);
     if (params.sourceSystemId) q.set('source_system_id', params.sourceSystemId);
+    if (params.entityType) q.set('entity_type', params.entityType);
+    if (params.excludeDuplicates) q.set('exclude_duplicates', 'true');
     if (params.search?.trim()) q.set('search', params.search.trim());
     const qs = q.toString();
     const path = qs ? `/raw-records/?${qs}` : '/raw-records/';

@@ -29,9 +29,13 @@ from sqlalchemy.orm import Session
 from signalmdm.database import SessionLocal, get_db
 from signalmdm.schemas.ingestion_schema import (
     IngestionRunCreate,
+    IngestionRunFromSessionCreate,
     IngestionRunRead,
+    IngestionLineageRunSummary,
+    IngestionResolveConfigRead,
     IngestionStatusRead,
 )
+from signalmdm.models.upload_session import UploadSessionFile
 from signalmdm.schemas.common import ok
 from signalmdm.services.ingestion_service import ingestion_service
 from signalmdm.services.raw_service import raw_service
@@ -78,8 +82,121 @@ def start_ingestion(
         performed_by=auth.user_id,
     )
     return ok(
-        data=IngestionRunRead.model_validate(run).model_dump(),
+        data=IngestionRunRead.from_orm_run(run).model_dump(),
         message="Ingestion run started.",
+    )
+
+
+@router.get(
+    "/lineage-summary",
+    summary="Per-run raw vs staging counts and entity labels",
+)
+def ingestion_lineage_summary(
+    limit: int = 50,
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+    auth: TokenPayload = Depends(require_auth),
+):
+    """
+    Use this to compare Raw Landing and Staging when multiple ingestion runs exist.
+
+    Each run is tagged with ``entity_type`` from its upload session. Staging should be
+    1:1 with raw for completed pipelines.
+    """
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
+    rows = ingestion_service.lineage_summary(db, target_tenant, limit=limit)
+    data = [IngestionLineageRunSummary.model_validate(r).model_dump(mode="json") for r in rows]
+    return ok(data=data, message=f"{len(data)} run(s) in lineage summary.")
+
+
+@router.get(
+    "/resolve-config",
+    summary="Preview auto-resolved entity, run type, and trigger for a session + source",
+)
+def resolve_ingestion_config(
+    upload_session_id: uuid.UUID,
+    source_system_id: uuid.UUID,
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+    auth: TokenPayload = Depends(require_auth),
+):
+    """
+    Returns how the server will configure an ingestion run — no manual dropdowns needed.
+
+    Entity comes from the upload session **domain** (validated against source supported entities).
+    Run type is **INITIAL_LOAD** or **DELTA_LOAD** based on prior completed runs for that source.
+    Trigger is **MANUAL** when started from the UI.
+    """
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
+    resolved = ingestion_service.resolve_config_for_session(
+        db,
+        target_tenant,
+        upload_session_id=upload_session_id,
+        source_system_id=source_system_id,
+    )
+    return ok(
+        data=IngestionResolveConfigRead.model_validate(resolved).model_dump(),
+        message="Ingestion settings resolved from session and source.",
+    )
+
+
+@router.post(
+    "/start-from-session",
+    summary="Start ingestion from a completed upload session",
+    status_code=status.HTTP_201_CREATED,
+)
+def start_ingestion_from_session(
+    body: IngestionRunFromSessionCreate,
+    background_tasks: BackgroundTasks,
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+    auth: TokenPayload = Depends(require_auth),
+):
+    """
+    Create an ingestion run and process all files already stored in an upload session.
+
+  Use this after files are uploaded on the Upload Data screen.
+    """
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
+    run, session_files = ingestion_service.create_run_from_session(
+        db,
+        tenant_id=target_tenant,
+        data=body,
+        performed_by=auth.user_id,
+    )
+
+    ingestion_service.transition_state(
+        db,
+        run_id=run.run_id,
+        tenant_id=target_tenant,
+        new_state=IngestionStateEnum.RUNNING,
+        file_count=len(session_files),
+        performed_by=auth.user_id,
+    )
+
+    background_tasks.add_task(
+        _ingest_session_files_pipeline,
+        run.run_id,
+        target_tenant,
+        [str(f.file_id) for f in session_files],
+    )
+
+    delay = settings.ingestion_pipeline_stage_delay_seconds
+    return ok(
+        data=IngestionRunRead.from_orm_run(run).model_dump(),
+        message=(
+            f"Ingestion started from upload session ({len(session_files)} file(s)). "
+            f"Pipeline running in background (~{delay}s between major states)."
+        ),
     )
 
 
@@ -301,6 +418,133 @@ def _parse_file(file_bytes: bytes, filename: str) -> list[dict]:
     return [dict(row) for row in csv.DictReader(io.StringIO(text))]
 
 
+def _parse_file_from_path(stored_path: str, filename: str) -> list[dict]:
+    with open(stored_path, "rb") as fh:
+        return _parse_file(fh.read(), filename)
+
+
+def _ingest_session_files_pipeline(
+    run_id: uuid.UUID,
+    tenant_id: str,
+    session_file_ids: list[str],
+) -> None:
+    """
+    Read upload-session files from disk, insert raw records, then staging + complete.
+    """
+    delay = max(0, settings.ingestion_pipeline_stage_delay_seconds)
+    db = SessionLocal()
+    try:
+        from signalmdm.models.ingestion_run import IngestionRun
+
+        time.sleep(delay)
+        run = db.query(IngestionRun).filter(IngestionRun.run_id == run_id).first()
+        if not run:
+            logger.warning("[ingestion] session pipeline: run %s gone", run_id)
+            return
+
+        tenant_uuid = uuid.UUID(str(tenant_id))
+        total_records = 0
+        files_processed = 0
+
+        for file_id_str in session_file_ids:
+            sf: UploadSessionFile | None = (
+                db.query(UploadSessionFile)
+                .filter(UploadSessionFile.file_id == uuid.UUID(file_id_str))
+                .first()
+            )
+            if not sf or not os.path.isfile(sf.stored_path):
+                logger.warning("[ingestion] session file missing: %s", file_id_str)
+                continue
+
+            with open(sf.stored_path, "rb") as fh:
+                file_bytes = fh.read()
+
+            upload_dir = os.path.join(os.getcwd(), settings.upload_dir, str(run_id))
+            os.makedirs(upload_dir, exist_ok=True)
+            safe_name = f"{uuid.uuid4()}_{sf.original_filename}"
+            run_stored_path = os.path.join(upload_dir, safe_name)
+            with open(run_stored_path, "wb") as out:
+                out.write(file_bytes)
+
+            file_upload = raw_service.save_file_upload(
+                db,
+                tenant_id=tenant_uuid,
+                run_id=run_id,
+                original_filename=sf.original_filename,
+                stored_path=run_stored_path,
+                file_bytes=file_bytes,
+                content_type=sf.content_type or "application/octet-stream",
+            )
+
+            rows = _parse_file_from_path(sf.stored_path, sf.original_filename)
+            if not rows:
+                logger.warning("[ingestion] no rows parsed from %s", sf.original_filename)
+                continue
+
+            count = raw_service.bulk_insert_raw_records(
+                db,
+                tenant_id=tenant_uuid,
+                run_id=run_id,
+                source_system_id=run.source_system_id,
+                file_id=file_upload.file_id,
+                rows=rows,
+            )
+            total_records += count
+            files_processed += 1
+
+        if files_processed == 0:
+            raise ValueError("No session files could be parsed into raw records.")
+
+        ingestion_service.transition_state(
+            db,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            new_state=IngestionStateEnum.RAW_LOADED,
+            record_count=total_records,
+            file_count=files_processed,
+            performed_by="session_pipeline",
+        )
+
+        time.sleep(delay)
+        staging_service.create_staging_from_run(
+            db,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            source_system_id=run.source_system_id,
+        )
+        ingestion_service.transition_state(
+            db,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            new_state=IngestionStateEnum.STAGING_CREATED,
+            performed_by="session_pipeline",
+        )
+
+        time.sleep(delay)
+        ingestion_service.transition_state(
+            db,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            new_state=IngestionStateEnum.COMPLETED,
+            performed_by="session_pipeline",
+        )
+    except Exception as exc:
+        logger.exception("[ingestion] session pipeline failed run=%s: %s", run_id, exc)
+        try:
+            ingestion_service.transition_state(
+                db,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                new_state=IngestionStateEnum.FAILED,
+                error_message=str(exc),
+                performed_by="session_pipeline",
+            )
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # 3. Status endpoint
 # ---------------------------------------------------------------------------
@@ -323,19 +567,36 @@ def get_status(
     run = ingestion_service.get_run(db, tenant_id=target_tenant, run_id=run_id)
     staging_count = staging_service.count_staging_for_run(
         db, run_id=run_id, tenant_id=target_tenant)
+    payload = IngestionRunRead.from_orm_run(run).model_dump()
+    payload["staging_count"] = staging_count
     return ok(
-        data=IngestionStatusRead(
-            run_id=run.run_id,
-            state=run.state,
-            file_count=run.file_count,
-            record_count=run.record_count,
-            staging_count=staging_count,
-            error_message=run.error_message,
-            started_at=run.started_at,
-            completed_at=run.completed_at,
-        ).model_dump(),
+        data=payload,
         message=f"Run is {run.state}.",
     )
+
+
+@router.delete(
+    "/{run_id}",
+    summary="Delete an ingestion run and all raw/staging data for that run",
+)
+def delete_ingestion_run(
+    run_id: uuid.UUID,
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+    auth: TokenPayload = Depends(require_auth),
+):
+    """Permanently remove the run and cascaded file, raw, and staging records."""
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
+    ingestion_service.delete_run(
+        db,
+        tenant_id=target_tenant,
+        run_id=run_id,
+        performed_by=auth.user_id,
+    )
+    return ok(message="Ingestion run deleted.")
 
 
 @router.post(
@@ -382,6 +643,6 @@ def list_runs(
 
     runs = ingestion_service.list_runs(db, tenant_id=target_tenant, skip=skip, limit=limit)
     return ok(
-        data=[IngestionRunRead.model_validate(r).model_dump() for r in runs],
+        data=[IngestionRunRead.from_orm_run(r).model_dump() for r in runs],
         message=f"{len(runs)} ingestion run(s) found.",
     )

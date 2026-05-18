@@ -29,6 +29,7 @@ def list_staging_records(
     limit: int = Query(50, ge=1, le=500),
     run_id: uuid.UUID | None = Query(None, description="Filter by ingestion run"),
     source_system_id: uuid.UUID | None = Query(None, description="Filter by source system"),
+    entity_type: str | None = Query(None, max_length=50, description="Filter by ingestion entity"),
     search: str | None = Query(None, max_length=200, description="Search ids or JSON text"),
     x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
@@ -50,6 +51,7 @@ def list_staging_records(
         limit=limit,
         run_id=run_id,
         source_system_id=source_system_id,
+        entity_type=entity_type,
         search=search,
     )
     data = [StagingRecordListItem.model_validate(r).model_dump(mode="json") for r in rows]

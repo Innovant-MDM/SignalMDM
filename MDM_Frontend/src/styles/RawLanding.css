@@ -39,6 +39,115 @@
     color: var(--text-secondary);
 }
 
+.rl-run-banner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 16px;
+    margin-bottom: 4px;
+    border-radius: var(--r-md);
+    background: var(--blue-500-08);
+    border: 1px solid var(--blue-500-25);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.rl-run-banner strong {
+    color: var(--text-primary);
+    margin-right: 8px;
+}
+
+.rl-run-banner__id {
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    margin-right: 10px;
+}
+
+.rl-run-banner__meta {
+    display: block;
+    width: 100%;
+    margin-top: 4px;
+    font-size: 12px;
+}
+
+.rl-run-banner__meta--compare {
+    color: var(--blue-700);
+    font-weight: 500;
+}
+
+.rl-lineage-card {
+    padding: 14px 16px;
+    border-radius: var(--r-md);
+    border: 1px solid var(--border-light);
+    background: var(--bg-surface);
+    margin-bottom: 4px;
+}
+
+.rl-lineage-card__head {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+}
+
+.rl-lineage-card__sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.rl-lineage-table-wrap {
+    overflow-x: auto;
+}
+
+.rl-lineage-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+}
+
+.rl-lineage-table th,
+.rl-lineage-table td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.rl-lineage-warn {
+    color: var(--amber-600);
+    font-weight: 600;
+}
+
+.rl-run-link {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+}
+
+.rl-entity-chip--sm {
+    font-size: 10px;
+    padding: 2px 6px;
+}
+
+.rl-hide-dup {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
 .rl-page-header__actions {
     display: flex;
     align-items: center;
@@ -139,6 +248,19 @@
 }
 
 /* Table Card */
+.rl-lineage-empty-card {
+    padding: 28px 24px;
+    text-align: center;
+}
+
+.rl-lineage-empty-card__text {
+    margin: 0 auto;
+    max-width: 520px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
 .rl-table-card {
     background: #fff;
     border: 1px solid var(--border-light);

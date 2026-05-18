@@ -21,6 +21,8 @@ export interface StagingRecordListRead {
   source_name: string;
   state: StagingStateApi;
   mapped_entity_type: string | null;
+  ingestion_entity_type: string | null;
+  run_type: string | null;
   entity_display: string;
   entity_data: Record<string, unknown>;
   raw_data: Record<string, unknown>;
@@ -55,6 +57,8 @@ export interface StagingUiRecord {
   rawId: string;
   srcId: string;
   entity: string;
+  ingestionEntity: string | null;
+  runType: string | null;
   stgState: string;
   stgBadgeClass: StagingBadgeClass;
   valStatus: ValidationStatusUi;
@@ -105,7 +109,9 @@ export function toStagingUiRecord(r: StagingRecordListRead): StagingUiRecord {
     id: r.staging_id,
     rawId: r.raw_record_id,
     srcId: r.source_record_id,
-    entity: r.entity_display,
+    entity: r.ingestion_entity_type || r.entity_display,
+    ingestionEntity: r.ingestion_entity_type,
+    runType: r.run_type,
     stgState: r.state,
     stgBadgeClass: stagingBadgeClass(r.state),
     valStatus: val,
@@ -131,6 +137,7 @@ export const stagingService = {
     tenantId?: string;
     runId?: string;
     sourceSystemId?: string;
+    entityType?: string;
     search?: string;
   }): Promise<StagingListResponse> {
     const q = new URLSearchParams();
@@ -138,6 +145,7 @@ export const stagingService = {
     if (params.limit != null) q.set('limit', String(params.limit));
     if (params.runId) q.set('run_id', params.runId);
     if (params.sourceSystemId) q.set('source_system_id', params.sourceSystemId);
+    if (params.entityType) q.set('entity_type', params.entityType);
     if (params.search?.trim()) q.set('search', params.search.trim());
     const qs = q.toString();
     const path = qs ? `/staging-records/?${qs}` : '/staging-records/';

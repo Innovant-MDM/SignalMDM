@@ -16,6 +16,7 @@ from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from signalmdm.enums import IngestionStateEnum
+from signalmdm.schemas.ingestion_schema import parse_run_metadata
 from signalmdm.models.file_upload import FileUpload
 from signalmdm.models.ingestion_run import IngestionRun
 from signalmdm.models.raw_record import RawRecord
@@ -174,7 +175,9 @@ class RawService:
         limit: int = 100,
         run_id: Optional[uuid.UUID] = None,
         source_system_id: Optional[uuid.UUID] = None,
+        entity_type: Optional[str] = None,
         search: Optional[str] = None,
+        exclude_duplicates: bool = False,
     ) -> tuple[list[dict[str, Any]], int]:
         """
         Paginated raw records for Raw Landing (newest first).
@@ -183,7 +186,7 @@ class RawService:
         """
         tid = self._parse_tenant_id(tenant_id)
         q = (
-            db.query(RawRecord, SourceSystem, IngestionRun.state)
+            db.query(RawRecord, SourceSystem, IngestionRun)
             .join(SourceSystem, SourceSystem.source_system_id == RawRecord.source_system_id)
             .join(IngestionRun, IngestionRun.run_id == RawRecord.run_id)
         )
@@ -193,6 +196,9 @@ class RawService:
             q = q.filter(RawRecord.run_id == run_id)
         if source_system_id is not None:
             q = q.filter(RawRecord.source_system_id == source_system_id)
+        if entity_type and entity_type.strip():
+            ent = entity_type.strip().upper()
+            q = q.filter(IngestionRun.triggered_by.ilike(f"%entity:{ent}%"))
         if search and search.strip():
             term = f"%{search.strip()}%"
             q = q.filter(
@@ -205,7 +211,7 @@ class RawService:
 
         total = q.count()
         rows = (
-            q.order_by(RawRecord.created_at.desc())
+            q.order_by(IngestionRun.created_at.desc(), RawRecord.run_id, RawRecord.row_index)
             .offset(skip)
             .limit(limit)
             .all()
@@ -222,12 +228,15 @@ class RawService:
         staging_by_raw = {s.raw_record_id: s for s in staging_list}
 
         out: list[dict[str, Any]] = []
-        for rr, src, run_state in rows:
+        for rr, src, run in rows:
             st = staging_by_raw.get(rr.raw_record_id)
             has_staging = st is not None
             mapped = st.mapped_entity_type if st else None
-            hint = mapped or self._entity_hint_from_source(src)
-            status = self._processing_status(str(run_state), has_staging)
+            run_meta = parse_run_metadata(run.triggered_by)
+            ingestion_entity = run_meta.get("entity_type")
+            hint = mapped or ingestion_entity or self._entity_hint_from_source(src)
+            run_state = str(run.state)
+            status = self._processing_status(run_state, has_staging)
             out.append(
                 {
                     "raw_record_id": rr.raw_record_id,
@@ -235,7 +244,9 @@ class RawService:
                     "run_id": rr.run_id,
                     "source_system_id": rr.source_system_id,
                     "source_name": src.source_name,
-                    "ingestion_run_state": str(run_state),
+                    "ingestion_run_state": run_state,
+                    "ingestion_entity_type": ingestion_entity,
+                    "run_type": run_meta.get("run_type"),
                     "row_index": rr.row_index,
                     "raw_data": rr.raw_data,
                     "checksum_md5": rr.checksum_md5,
@@ -263,6 +274,9 @@ class RawService:
         # Drop helper key from public payload
         for item in out:
             item["source_record_id"] = item.pop("_src_id")
+
+        if exclude_duplicates:
+            out = [i for i in out if i["processing_status"] != "DUPLICATE"]
 
         return out, total
 

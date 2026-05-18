@@ -7,13 +7,19 @@ import {
     type ChangeEvent,
     type MouseEvent,
 } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 
+import IngestionRunLineagePicker from '../../components/ingestion/IngestionRunLineagePicker';
+import { formatRunOptionLabel, resolveInitialRunId } from '../../utils/ingestionRunScope';
 import '../../styles/theme.css';
 import '../../styles/StagingRecords.css';
 
 
-import { sourceService, ENTITY_TYPES, type SourceRecord } from '../../services/sourceService';
-import { ingestionRunService, type IngestionRunRecord } from '../../services/ingestionRunService';
+import { sourceService, type SourceRecord } from '../../services/sourceService';
+import {
+    ingestionRunService,
+    type IngestionLineageRunSummary,
+} from '../../services/ingestionRunService';
 import { useTenantConfig } from '../../context/TenantConfigContext';
 import {
     stagingService,
@@ -341,11 +347,13 @@ function RecordDrawer({ record, onClose }: RecordDrawerProps) {
 }
 
 export default function StagingRecords() {
+    const [searchParams, setSearchParams] = useSearchParams();
+    const runIdFromUrl = searchParams.get('runId');
     const { activeTenantId } = useTenantConfig();
     const [records, setRecords] = useState<StagingUiRecord[]>([]);
     const [totalApi, setTotalApi] = useState(0);
     const [sources, setSources] = useState<SourceRecord[]>([]);
-    const [runs, setRuns] = useState<IngestionRunRecord[]>([]);
+    const [lineage, setLineage] = useState<IngestionLineageRunSummary[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -355,7 +363,7 @@ export default function StagingRecords() {
     const [filterEntity, setFilterEntity] = useState<string>('ALL');
     const [filterStgStatus, setFilterStgStatus] = useState<string>('ALL');
     const [filterValStatus, setFilterValStatus] = useState<string>('ALL');
-    const [filterRun, setFilterRun] = useState<string>('ALL');
+    const [filterRun, setFilterRun] = useState<string>(runIdFromUrl || 'ALL');
     const [viewRecord, setViewRecord] = useState<StagingUiRecord | null>(null);
     const [page, setPage] = useState(1);
 
@@ -363,6 +371,41 @@ export default function StagingRecords() {
         const t = window.setTimeout(() => setDebouncedSearch(searchInput), 400);
         return () => window.clearTimeout(t);
     }, [searchInput]);
+
+    useEffect(() => {
+        if (runIdFromUrl) {
+            setFilterRun(runIdFromUrl);
+            return;
+        }
+        if (lineage.length === 0) return;
+        const def = resolveInitialRunId(null, lineage, 'staging');
+        if (def !== 'ALL') {
+            setFilterRun(def);
+            setSearchParams({ runId: def }, { replace: true });
+        }
+    }, [runIdFromUrl, lineage, setSearchParams]);
+
+    const selectRun = useCallback(
+        (runId: string) => {
+            setFilterRun(runId);
+            setPage(1);
+            if (runId === 'ALL') setSearchParams({});
+            else setSearchParams({ runId });
+        },
+        [setSearchParams],
+    );
+
+    const activeLineage = useMemo(
+        () => (filterRun !== 'ALL' ? lineage.find((l) => l.run_id === filterRun) : null),
+        [filterRun, lineage],
+    );
+
+    const entityOptions = useMemo(() => {
+        const set = new Set<string>();
+        lineage.forEach((l) => { if (l.entity_type) set.add(l.entity_type); });
+        records.forEach((r) => { if (r.ingestionEntity) set.add(r.ingestionEntity); });
+        return Array.from(set).sort();
+    }, [lineage, records]);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -372,17 +415,22 @@ export default function StagingRecords() {
 
             const srcData = await sourceService.listSources(0, 100, tId);
             setSources(srcData);
-            const nameMap: Record<string, string> = {};
-            srcData.forEach((s) => { nameMap[s.id] = s.sourceName; });
-            const runData = await ingestionRunService.listRuns(0, 80, nameMap, tId);
-            setRuns(runData);
+            const lineageData = await ingestionRunService.fetchLineageSummary(tId, 50);
+            setLineage(lineageData);
+
+            if (filterRun === 'ALL') {
+                setRecords([]);
+                setTotalApi(0);
+                return;
+            }
 
             const res = await stagingService.listRecords({
                 skip: 0,
                 limit: 500,
                 tenantId: tId,
-                runId: filterRun === 'ALL' ? undefined : filterRun,
+                runId: filterRun,
                 sourceSystemId: filterSource === 'ALL' ? undefined : filterSource,
+                entityType: filterEntity === 'ALL' ? undefined : filterEntity,
                 search: debouncedSearch.trim() || undefined,
             });
             setRecords(res.items.map(toStagingUiRecord));
@@ -396,11 +444,30 @@ export default function StagingRecords() {
         } finally {
             setLoading(false);
         }
-    }, [activeTenantId, filterRun, filterSource, debouncedSearch]);
+    }, [activeTenantId, filterRun, filterSource, filterEntity, debouncedSearch]);
 
     useEffect(() => {
         void loadData();
     }, [loadData]);
+
+    const handleDeleteRun = useCallback(
+        async (runId: string) => {
+            try {
+                const tId = activeTenantId ?? undefined;
+                await ingestionRunService.deleteRun(runId, tId);
+                if (filterRun === runId) {
+                    selectRun('ALL');
+                }
+                await loadData();
+            } catch (err) {
+                const msg =
+                    err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Delete failed';
+                setError(msg);
+                throw err;
+            }
+        },
+        [activeTenantId, filterRun, selectRun, loadData],
+    );
 
     const filtered = useMemo(() => {
         return records.filter((r) => {
@@ -440,7 +507,7 @@ export default function StagingRecords() {
                 <div>
                     <h1 className="sr-page-title">Staging Records</h1>
                     <p className="sr-page-subtitle">
-                        Records staged for mapping (up to 500 loaded; filters refine this set)
+                        Staging rows are scoped per ingestion run — pick a run below (1:1 with Raw Landing for that batch)
                     </p>
                 </div>
                 <div className="sr-page-header__actions">
@@ -452,6 +519,39 @@ export default function StagingRecords() {
                     </button>
                 </div>
             </div>
+
+            <IngestionRunLineagePicker
+                lineage={lineage}
+                activeRunId={filterRun}
+                onSelectRun={selectRun}
+                onDeleteRun={handleDeleteRun}
+                screen="staging"
+                loading={loading}
+            />
+
+            {filterRun !== 'ALL' && activeLineage && (
+                <div className="sr-lineage-banner">
+                    <div>
+                        <strong>Run {filterRun.slice(0, 8)}…</strong>
+                        <span className="sr-lineage-banner__meta">
+                            Entity {activeLineage.entity_type || '—'} · Raw {activeLineage.raw_record_count} → Staging{' '}
+                            {activeLineage.staging_record_count}
+                            {activeLineage.counts_aligned
+                                ? ' (1:1 with Raw Landing for this run)'
+                                : ` — ${activeLineage.pipeline_note}`}
+                        </span>
+                    </div>
+                    <Link to={`/raw-landing?runId=${encodeURIComponent(filterRun)}`} className="sr-btn sr-btn--ghost">
+                        View raw records →
+                    </Link>
+                </div>
+            )}
+
+            {filterRun === 'ALL' && lineage.some((l) => !l.counts_aligned && l.raw_record_count > 0) && (
+                <p className="sr-lineage-hint">
+                    Overview mode: pick a run in the table above. Mixed "all runs" record lists are hidden because counts are per batch.
+                </p>
+            )}
 
             {error && (
                 <div
@@ -467,10 +567,19 @@ export default function StagingRecords() {
                 </div>
             )}
 
-            <div className="sr-summary-row">
+            {filterRun === 'ALL' ? (
+                <div className="sr-table-card sr-lineage-empty-card">
+                    <p className="sr-lineage-empty-card__text">
+                        Select an ingestion run in the table above. Staging does not mix rows from different runs —
+                        each completed run should match Raw Landing 1:1 for that batch.
+                    </p>
+                </div>
+            ) : (
+            <>
+                        <div className="sr-summary-row">
                 <div className="sr-summary-card">
                     <span className="sr-summary-card__value">{totalApi}</span>
-                    <span className="sr-summary-card__label">Total (server match)</span>
+                    <span className="sr-summary-card__label">Total (this run)</span>
                 </div>
                 <div className="sr-summary-card">
                     <span className="sr-summary-card__value">{records.length}</span>
@@ -544,8 +653,8 @@ export default function StagingRecords() {
                                 setPage(1);
                             }}
                         >
-                            <option value="ALL">All entities</option>
-                            {ENTITY_TYPES.map((e) => (
+                            <option value="ALL">All entities (from runs)</option>
+                            {entityOptions.map((e) => (
                                 <option key={e} value={e}>
                                     {e}
                                 </option>
@@ -585,14 +694,13 @@ export default function StagingRecords() {
                             className="sr-select"
                             value={filterRun}
                             onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                                setFilterRun(e.target.value);
-                                setPage(1);
+                                selectRun(e.target.value);
                             }}
                         >
-                            <option value="ALL">All runs</option>
-                            {runs.map((r) => (
-                                <option key={r.id} value={r.id}>
-                                    {r.id.slice(0, 8)}… — {r.sourceName}
+                            <option value="ALL">Overview (no records)</option>
+                            {lineage.map((row) => (
+                                <option key={row.run_id} value={row.run_id}>
+                                    {formatRunOptionLabel(row)}
                                 </option>
                             ))}
                         </select>
@@ -738,6 +846,9 @@ export default function StagingRecords() {
                     </div>
                 </div>
             </div>
+
+            </>
+            )}
 
             {viewRecord && <RecordDrawer record={viewRecord} onClose={() => setViewRecord(null)} />}
         </div>

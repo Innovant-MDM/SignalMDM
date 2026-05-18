@@ -24,6 +24,8 @@ class StagingRecordListItem(BaseModel):
     source_name: str
     state: str = Field(description="READY_FOR_MAPPING | MAPPED | REJECTED")
     mapped_entity_type: Optional[str] = None
+    ingestion_entity_type: Optional[str] = None
+    run_type: Optional[str] = None
     entity_display: str
     entity_data: dict[str, Any]
     raw_data: dict[str, Any]

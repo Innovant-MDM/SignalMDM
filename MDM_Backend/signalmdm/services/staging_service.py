@@ -23,6 +23,7 @@ from signalmdm.models.staging_entity import StagingEntity
 from signalmdm.models.source_system import SourceSystem
 from signalmdm.models.ingestion_run import IngestionRun
 from signalmdm.enums import StagingStateEnum
+from signalmdm.schemas.ingestion_schema import parse_run_metadata
 
 
 class StagingService:
@@ -44,6 +45,18 @@ class StagingService:
             We do NOT load all raw_records into Python memory at once for large
             datasets — we process in chunks of 500.
         """
+        run = (
+            db.query(IngestionRun)
+            .filter(
+                IngestionRun.run_id == run_id,
+                IngestionRun.tenant_id == tenant_id,
+            )
+            .first()
+        )
+        entity_type = (
+            parse_run_metadata(run.triggered_by).get("entity_type") if run else None
+        )
+
         chunk_size = 500
         offset = 0
         total_created = 0
@@ -72,6 +85,7 @@ class StagingService:
                     raw_record_id=raw.raw_record_id,
                     source_system_id=source_system_id,
                     entity_data=raw.raw_data,  # verbatim copy in Phase 1
+                    mapped_entity_type=entity_type,
                     state=StagingStateEnum.READY_FOR_MAPPING,
                 )
                 for raw in raw_batch
@@ -159,11 +173,12 @@ class StagingService:
         limit: int = 100,
         run_id: Optional[uuid.UUID] = None,
         source_system_id: Optional[uuid.UUID] = None,
+        entity_type: Optional[str] = None,
         search: Optional[str] = None,
     ) -> tuple[list[dict[str, Any]], int]:
         tid = self._parse_tenant_id(tenant_id)
         q = (
-            db.query(StagingEntity, SourceSystem, RawRecord, IngestionRun.state)
+            db.query(StagingEntity, SourceSystem, RawRecord, IngestionRun)
             .join(SourceSystem, SourceSystem.source_system_id == StagingEntity.source_system_id)
             .join(RawRecord, RawRecord.raw_record_id == StagingEntity.raw_record_id)
             .join(IngestionRun, IngestionRun.run_id == StagingEntity.run_id)
@@ -174,6 +189,9 @@ class StagingService:
             q = q.filter(StagingEntity.run_id == run_id)
         if source_system_id is not None:
             q = q.filter(StagingEntity.source_system_id == source_system_id)
+        if entity_type and entity_type.strip():
+            ent = entity_type.strip().upper()
+            q = q.filter(IngestionRun.triggered_by.ilike(f"%entity:{ent}%"))
         if search and search.strip():
             term = f"%{search.strip()}%"
             q = q.filter(
@@ -193,8 +211,14 @@ class StagingService:
             .all()
         )
         out: list[dict[str, Any]] = []
-        for st, src, raw, run_state in rows:
-            hint = st.mapped_entity_type or self._entity_hint_from_source(src)
+        for st, src, raw, run in rows:
+            run_meta = parse_run_metadata(run.triggered_by)
+            ingestion_entity = run_meta.get("entity_type")
+            hint = (
+                st.mapped_entity_type
+                or ingestion_entity
+                or self._entity_hint_from_source(src)
+            )
             src_id = self._derive_source_record_id(raw.raw_data, raw.row_index)
             dq = self._dq_score_placeholder(st.entity_data)
             state_val = st.state.value if isinstance(st.state, StagingStateEnum) else str(st.state)
@@ -208,11 +232,13 @@ class StagingService:
                     "source_name": src.source_name,
                     "state": state_val,
                     "mapped_entity_type": st.mapped_entity_type,
+                    "ingestion_entity_type": ingestion_entity,
                     "entity_display": hint,
+                    "run_type": run_meta.get("run_type"),
                     "entity_data": st.entity_data,
                     "raw_data": raw.raw_data,
                     "created_at": st.created_at,
-                    "ingestion_run_state": str(run_state),
+                    "ingestion_run_state": str(run.state),
                     "source_record_id": src_id,
                     "dq_score": dq,
                     "validation_status": self._validation_status(st.state),

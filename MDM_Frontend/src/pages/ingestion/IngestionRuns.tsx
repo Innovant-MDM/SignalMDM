@@ -1,9 +1,16 @@
 // MDM_Frontend/src/pages/ingestion/IngestionRuns.tsx
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import '../../styles/theme.css';
 import '../../styles/IngestionRuns.css';
-import { ingestionRunService, type IngestionRunRecord, type RunStatus } from '../../services/ingestionRunService';
-import { uploadService } from '../../services/uploadService';
+import {
+    ingestionRunService,
+    describeResolvedConfig,
+    type IngestionResolvedConfig,
+    type IngestionRunRecord,
+    type RunStatus,
+} from '../../services/ingestionRunService';
+import { uploadSessionService, type UploadSession } from '../../services/uploadSessionService';
 import { sourceService, type SourceRecord } from '../../services/sourceService';
 import { authService } from '../../services/authService';
 import { useTenantConfig } from '../../context/TenantConfigContext';
@@ -19,10 +26,6 @@ interface TimelineItem {
     fail?: boolean;
 }
 
-type EntityType = "CUSTOMER" | "SUPPLIER" | "PRODUCT" | "ACCOUNT" | "ASSET" | "LOCATION";
-type RunType = "INITIAL_LOAD" | "DELTA_LOAD" | "REPROCESS" | "TEST_LOAD";
-type TriggerType = "MANUAL" | "SCHEDULED" | "API" | "EVENT";
-
 interface RunError {
     code: string;
     msg: string;
@@ -31,18 +34,14 @@ interface RunError {
 interface StartIngestionData {
     tenantId: string;
     sourceId: string;
-    entity: string;
-    runType: string;
-    triggerType: string;
-    file?: File;
+    sessionId: string;
 }
 
 interface ModalErrors {
     tenant?: string;
     source?: string;
-    entity?: string;
-    runType?: string;
-    triggerType?: string;
+    session?: string;
+    resolve?: string;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -56,12 +55,30 @@ const STATUS_LABEL: Record<RunStatus, string> = {
 };
 
 const RUN_TIMELINES: Record<RunStatus, TimelineItem[]> = {
-    COMPLETED: [{ label: "Run Created", ts: "Done", done: true }, { label: "Processing Completed", ts: "Done", done: true }],
-    RUNNING: [{ label: "Run Created", ts: "Done", done: true }, { label: "Processing Records…", ts: "In progress", active: true }],
-    FAILED: [{ label: "Run Created", ts: "Done", done: true }, { label: "Process Stopped", ts: "Failed", fail: true }],
+    COMPLETED: [
+        { label: "Run Created", ts: "Done", done: true },
+        { label: "Files Ingested", ts: "Done", done: true },
+        { label: "Raw Landing", ts: "Done", done: true },
+        { label: "Staging Created", ts: "Done", done: true },
+        { label: "Completed", ts: "Done", done: true },
+    ],
+    RUNNING: [
+        { label: "Run Created", ts: "Done", done: true },
+        { label: "Parsing upload session files…", ts: "In progress", active: true },
+    ],
+    FAILED: [{ label: "Run Created", ts: "Done", done: true }, { label: "Pipeline Failed", ts: "Failed", fail: true }],
     CREATED: [{ label: "Run Queued", ts: "Pending", done: false }],
-    RAW_LOADED: [{ label: "Run Created", ts: "Done", done: true }, { label: "Raw Loaded", ts: "Done", done: true }],
-    STAGING_CREATED: [{ label: "Run Created", ts: "Done", done: true }, { label: "Staging Created", ts: "Done", done: true }],
+    RAW_LOADED: [
+        { label: "Run Created", ts: "Done", done: true },
+        { label: "Raw Records Loaded", ts: "Done", done: true },
+        { label: "Building staging…", ts: "Next", active: true },
+    ],
+    STAGING_CREATED: [
+        { label: "Run Created", ts: "Done", done: true },
+        { label: "Raw Loaded", ts: "Done", done: true },
+        { label: "Staging Created", ts: "Done", done: true },
+        { label: "Finalizing…", ts: "In progress", active: true },
+    ],
 };
 
 const RUN_ERRORS: Partial<Record<RunStatus, RunError[]>> = {};
@@ -84,47 +101,96 @@ interface StartIngestionModalProps {
     sources: SourceRecord[];
     tenants: { id: string; tenantName: string }[];
     isSuperAdmin: boolean;
+    activeTenantId: string | null;
+    initialSessionId?: string | null;
+    submitting: boolean;
 }
 
-function StartIngestionModal({ onClose, onStart, sources, tenants, isSuperAdmin }: StartIngestionModalProps): React.ReactElement {
-    const [tenantId, setTenantId] = useState<string>((window as any).activeTenantId || "");
+function StartIngestionModal({
+    onClose,
+    onStart,
+    sources,
+    tenants,
+    isSuperAdmin,
+    activeTenantId,
+    initialSessionId,
+    submitting,
+}: StartIngestionModalProps): React.ReactElement {
+    const [tenantId, setTenantId] = useState<string>(activeTenantId || "");
     const [sourceId, setSourceId] = useState<string>("");
-    const [entity, setEntity] = useState<string>("");
-    const [runType, setRunType] = useState<string>("");
-    const [triggerType, setTriggerType] = useState<string>("MANUAL");
-    const [file, setFile] = useState<File | null>(null);
+    const [sessionId, setSessionId] = useState<string>(initialSessionId || "");
+    const [resolved, setResolved] = useState<IngestionResolvedConfig | null>(null);
+    const [resolveLoading, setResolveLoading] = useState(false);
+    const [sessions, setSessions] = useState<UploadSession[]>([]);
+    const [sessionsLoading, setSessionsLoading] = useState(false);
     const [errors, setErrors] = useState<ModalErrors>({});
 
-    // If activeTenantId changes in parent (e.g. via global filter), sync it
     useEffect(() => {
-        if ((window as any).activeTenantId) {
-            setTenantId((window as any).activeTenantId);
+        if (activeTenantId) setTenantId(activeTenantId);
+    }, [activeTenantId]);
+
+    const effectiveTenantId = isSuperAdmin ? tenantId : (activeTenantId || tenantId);
+    const showTenantSelector = isSuperAdmin;
+
+    const filteredSources = effectiveTenantId
+        ? sources.filter(s => s.tenantId === effectiveTenantId)
+        : (isSuperAdmin ? [] : sources);
+
+    const readySessions = sessions.filter(s => s.file_count > 0);
+    const selectedSession = readySessions.find(s => s.session_id === sessionId);
+
+    useEffect(() => {
+        if (!effectiveTenantId) {
+            setSessions([]);
+            return;
         }
-    }, []);
+        let cancelled = false;
+        setSessionsLoading(true);
+        uploadSessionService.listSessions(effectiveTenantId)
+            .then((list) => { if (!cancelled) setSessions(list); })
+            .catch(() => { if (!cancelled) setSessions([]); })
+            .finally(() => { if (!cancelled) setSessionsLoading(false); });
+        return () => { cancelled = true; };
+    }, [effectiveTenantId]);
 
-    // Show selector if we have tenants (implies SuperAdmin or equivalent)
-    const showTenantSelector = isSuperAdmin || tenants.length > 0;
+    useEffect(() => {
+        if (!sessionId || !sourceId || !effectiveTenantId) {
+            setResolved(null);
+            return;
+        }
+        let cancelled = false;
+        setResolveLoading(true);
+        setErrors((e) => ({ ...e, resolve: undefined }));
+        ingestionRunService
+            .resolveConfig(sessionId, sourceId, effectiveTenantId)
+            .then((cfg) => { if (!cancelled) setResolved(cfg); })
+            .catch((err) => {
+                if (!cancelled) {
+                    setResolved(null);
+                    setErrors((e) => ({
+                        ...e,
+                        resolve: err instanceof Error ? err.message : "Could not resolve ingestion settings",
+                    }));
+                }
+            })
+            .finally(() => { if (!cancelled) setResolveLoading(false); });
+        return () => { cancelled = true; };
+    }, [sessionId, sourceId, effectiveTenantId]);
 
-    // Filter sources by selected tenant if we are showing the selector
-    const filteredSources = showTenantSelector && tenantId 
-        ? sources.filter(s => s.tenantId === tenantId)
-        : (showTenantSelector ? [] : sources);
+    const resolveHints = resolved ? describeResolvedConfig(resolved) : null;
 
     const handleSubmit = (): void => {
         const errs: ModalErrors = {};
         if (showTenantSelector && !tenantId) errs.tenant = "Target tenant is required";
         if (!sourceId) errs.source = "Source system is required";
-        if (!triggerType) errs.triggerType = "Trigger type is required";
-        if (!file) errs.source = "Please select a file to upload";
-        
+        if (!sessionId) errs.session = "Select an upload session with files";
+        if (!resolved) errs.resolve = errors.resolve || "Select session and source to load resolved settings";
+
         if (Object.keys(errs).length) { setErrors(errs); return; }
         onStart({
             tenantId: showTenantSelector ? tenantId : "",
             sourceId,
-            entity,
-            runType,
-            triggerType,
-            file: file || undefined
+            sessionId,
         });
     };
 
@@ -134,7 +200,9 @@ function StartIngestionModal({ onClose, onStart, sources, tenants, isSuperAdmin 
                 <div className="sim-header">
                     <div>
                         <h2 className="sim-header__title">Start Ingestion Run</h2>
-                        <p className="sim-header__sub">Configure and launch a new ingestion job</p>
+                        <p className="sim-header__sub">
+                            Pick upload session + source — entity, run type, and trigger are resolved automatically
+                        </p>
                     </div>
                     <button className="sim-close" onClick={onClose}>✕</button>
                 </div>
@@ -174,40 +242,78 @@ function StartIngestionModal({ onClose, onStart, sources, tenants, isSuperAdmin 
                                 {errors.source && <span className="sim-error-msg">{errors.source}</span>}
                             </div>
 
-                            <div className="sim-field sim-field--full">
-                                <label className="sim-label">Data File (CSV/JSON) <span className="sim-required">*</span></label>
-                                <input 
-                                    type="file" 
-                                    className="sim-select" 
-                                    accept=".csv,.json"
-                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFile(e.target.files?.[0] || null)}
-                                />
+                            <div className={`sim-field sim-field--full${errors.session ? " sim-field--error" : ""}`}>
+                                <label className="sim-label">Upload Session <span className="sim-required">*</span></label>
+                                <select
+                                    className="sim-select"
+                                    value={sessionId}
+                                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                                        setSessionId(e.target.value);
+                                        setResolved(null);
+                                    }}
+                                    disabled={!effectiveTenantId || sessionsLoading}
+                                >
+                                    <option value="">
+                                        {!effectiveTenantId
+                                            ? "— Select tenant first —"
+                                            : sessionsLoading
+                                                ? "— Loading sessions… —"
+                                                : readySessions.length === 0
+                                                    ? "— No sessions with files (upload first) —"
+                                                    : "— Select session —"}
+                                    </option>
+                                    {readySessions.map(s => (
+                                        <option key={s.session_id} value={s.session_id}>
+                                            {s.session_name} · {s.domain} · {s.file_count} file{s.file_count !== 1 ? "s" : ""}
+                                        </option>
+                                    ))}
+                                </select>
+                                {errors.session && <span className="sim-error-msg">{errors.session}</span>}
+                                {selectedSession && (
+                                    <div className="ir-session-preview">
+                                        <span>Domain: <strong>{selectedSession.domain}</strong></span>
+                                        <span>{selectedSession.file_count} file(s) ready for ingestion</span>
+                                    </div>
+                                )}
                             </div>
 
-                            <div className={`sim-field${errors.entity ? " sim-field--error" : ""}`}>
-                                <label className="sim-label">Entity Type <span className="sim-required">*</span></label>
-                                <select className="sim-select" value={entity} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setEntity(e.target.value)}>
-                                    <option value="">— Select entity —</option>
-                                    {(["CUSTOMER", "SUPPLIER", "PRODUCT", "ACCOUNT", "ASSET", "LOCATION"] as EntityType[]).map(e => <option key={e} value={e}>{e}</option>)}
-                                </select>
-                                {errors.entity && <span className="sim-error-msg">{errors.entity}</span>}
-                            </div>
-
-                            <div className={`sim-field${errors.runType ? " sim-field--error" : ""}`}>
-                                <label className="sim-label">Run Type <span className="sim-required">*</span></label>
-                                <select className="sim-select" value={runType} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setRunType(e.target.value)}>
-                                    <option value="">— Select run type —</option>
-                                    {(["INITIAL_LOAD", "DELTA_LOAD", "REPROCESS", "TEST_LOAD"] as RunType[]).map(t => <option key={t} value={t}>{t}</option>)}
-                                </select>
-                                {errors.runType && <span className="sim-error-msg">{errors.runType}</span>}
-                            </div>
-
-                            <div className={`sim-field${errors.triggerType ? " sim-field--error" : ""}`}>
-                                <label className="sim-label">Trigger Type <span className="sim-required">*</span></label>
-                                <select className="sim-select" value={triggerType} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setTriggerType(e.target.value)}>
-                                    {(["MANUAL", "SCHEDULED", "API", "EVENT"] as TriggerType[]).map(t => <option key={t} value={t}>{t}</option>)}
-                                </select>
-                                {errors.triggerType && <span className="sim-error-msg">{errors.triggerType}</span>}
+                            <div className={`sim-field sim-field--full${errors.resolve ? " sim-field--error" : ""}`}>
+                                <label className="sim-label">Resolved configuration</label>
+                                {resolveLoading && (
+                                    <p className="ir-resolve-hint">Resolving entity, run type, and trigger…</p>
+                                )}
+                                {!resolveLoading && resolved && resolveHints && (
+                                    <div className="ir-resolve-panel">
+                                        <div className="ir-resolve-row">
+                                            <span className="ir-resolve-label">Entity</span>
+                                            <span className="ir-entity-chip">{resolved.entity_type}</span>
+                                            <span className="ir-resolve-note">{resolveHints.entityHint}</span>
+                                        </div>
+                                        <div className="ir-resolve-row">
+                                            <span className="ir-resolve-label">Run type</span>
+                                            <span className="ir-run-type">{resolved.run_type}</span>
+                                            <span className="ir-resolve-note">{resolveHints.runTypeHint}</span>
+                                        </div>
+                                        <div className="ir-resolve-row">
+                                            <span className="ir-resolve-label">Trigger</span>
+                                            <span className="ir-run-type">{resolved.trigger_type}</span>
+                                            <span className="ir-resolve-note">{resolveHints.triggerHint}</span>
+                                        </div>
+                                        {resolved.supported_entities.length > 0 && (
+                                            <p className="ir-resolve-hint">
+                                                Source allows: {resolved.supported_entities.join(", ")}
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+                                {!resolveLoading && sessionId && sourceId && !resolved && (
+                                    <p className="ir-resolve-hint ir-resolve-hint--warn">
+                                        {errors.resolve || "Could not resolve settings — check session domain matches the source."}
+                                    </p>
+                                )}
+                                {(!sessionId || !sourceId) && (
+                                    <p className="ir-resolve-hint">Select both session and source to preview auto-resolved settings.</p>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -216,7 +322,13 @@ function StartIngestionModal({ onClose, onStart, sources, tenants, isSuperAdmin 
                 <div className="sim-footer">
                     <button className="sim-btn sim-btn--ghost" onClick={onClose}>Cancel</button>
                     <div className="sim-footer__right">
-                        <button className="sim-btn sim-btn--primary" onClick={handleSubmit}>▶ Start Ingestion</button>
+                        <button
+                            className="sim-btn sim-btn--primary"
+                            onClick={handleSubmit}
+                            disabled={submitting || resolveLoading || !resolved}
+                        >
+                            {submitting ? "Starting pipeline…" : "▶ Start Ingestion"}
+                        </button>
                     </div>
                 </div>
             </div>
@@ -232,9 +344,10 @@ type DrawerTab = "overview" | "timeline" | "errors";
 interface RunDetailsDrawerProps {
     run: IngestionRunRecord;
     onClose: () => void;
+    onViewRawLanding: (runId: string) => void;
 }
 
-function RunDetailsDrawer({ run, onClose }: RunDetailsDrawerProps): React.ReactElement {
+function RunDetailsDrawer({ run, onClose, onViewRawLanding }: RunDetailsDrawerProps): React.ReactElement {
     const [tab, setTab] = useState<DrawerTab>("overview");
     const [isCancelling, setIsCancelling] = useState(false);
     const timeline: TimelineItem[] = RUN_TIMELINES[run.state] || RUN_TIMELINES["CREATED"];
@@ -284,8 +397,14 @@ function RunDetailsDrawer({ run, onClose }: RunDetailsDrawerProps): React.ReactE
                                     <StatusBadge status={run.state} />
                                 </div>
                                 <div className="ir-drawer__field">
-                                    <span className="ir-drawer__field-label">Triggered By</span>
-                                    <span className="ir-drawer__field-value">{run.triggeredBy}</span>
+                                    <span className="ir-drawer__field-label">Entity / Run</span>
+                                    <span className="ir-drawer__field-value">
+                                        {run.entityType || "—"} · {run.runType || "—"}
+                                    </span>
+                                </div>
+                                <div className="ir-drawer__field">
+                                    <span className="ir-drawer__field-label">Trigger</span>
+                                    <span className="ir-drawer__field-value">{run.triggerType || "—"}</span>
                                 </div>
                                 <div className="ir-drawer__field">
                                     <span className="ir-drawer__field-label">Started At</span>
@@ -367,6 +486,16 @@ function RunDetailsDrawer({ run, onClose }: RunDetailsDrawerProps): React.ReactE
                             {isCancelling ? "Stopping…" : "Stop Ingestion"}
                         </button>
                     )}
+                    {(run.state === "RAW_LOADED" || run.state === "STAGING_CREATED" || run.state === "COMPLETED") && run.recordCount > 0 && (
+                        <button
+                            type="button"
+                            className="ird-action-btn"
+                            onClick={() => onViewRawLanding(run.id)}
+                            style={{ marginRight: "auto", padding: "8px 16px", borderRadius: 6, border: "1px solid var(--blue-500-30)", background: "var(--blue-500-10)", color: "var(--blue-600)", fontWeight: 600, cursor: "pointer" }}
+                        >
+                            View Raw Landing →
+                        </button>
+                    )}
                     <button className="ird-action-btn" onClick={onClose} style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", fontWeight: 600, cursor: "pointer" }}>Close</button>
                 </div>
             </div>
@@ -378,18 +507,30 @@ function RunDetailsDrawer({ run, onClose }: RunDetailsDrawerProps): React.ReactE
    INGESTION RUNS PAGE
 ═══════════════════════════════════════════════════════════════ */
 function IngestionRuns(): React.ReactElement {
+    const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const { activeTenantId, activeTenantName, mode: tenantMode } = useTenantConfig();
     const [runs, setRuns] = useState<IngestionRunRecord[]>([]);
     const [sources, setSources] = useState<SourceRecord[]>([]);
     const [isSuperAdmin, setIsSuperAdmin] = useState<boolean>(false);
     const [loading, setLoading] = useState<boolean>(true);
+    const [starting, setStarting] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [showModal, setShowModal] = useState<boolean>(false);
     const [viewRun, setViewRun] = useState<IngestionRunRecord | null>(null);
     const [search, setSearch] = useState<string>("");
     const [filterStatus, setFilterStatus] = useState<string>("ALL");
     const [filterSource, setFilterSource] = useState<string>("ALL");
+    const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
     const refreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    const sessionIdFromUrl = searchParams.get("sessionId");
+
+    useEffect(() => {
+        if (sessionIdFromUrl) {
+            setShowModal(true);
+        }
+    }, [sessionIdFromUrl]);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -420,14 +561,16 @@ function IngestionRuns(): React.ReactElement {
         loadData();
     }, [loadData]);
 
-    /* Auto-refresh every 10s for running jobs */
+    /* Auto-refresh every 5s for active pipeline jobs */
     useEffect(() => {
         refreshRef.current = setInterval(() => {
-            const hasRunning = runs.some(r => r.state === "RUNNING" || r.state === "CREATED");
-            if (hasRunning) {
+            const hasActive = runs.some(r =>
+                r.state === "RUNNING" || r.state === "CREATED" || r.state === "RAW_LOADED" || r.state === "STAGING_CREATED"
+            );
+            if (hasActive) {
                 loadData();
             }
-        }, 10000);
+        }, 5000);
         return () => {
             if (refreshRef.current) clearInterval(refreshRef.current);
         };
@@ -443,34 +586,67 @@ function IngestionRuns(): React.ReactElement {
     });
 
     const handleStart = async (data: StartIngestionData): Promise<void> => {
-        setLoading(true);
+        setStarting(true);
+        const tId = isSuperAdmin ? data.tenantId : (activeTenantId ?? undefined);
         try {
-            const newRun = await ingestionRunService.startRun(
-                data.sourceId, 
-                "user", 
-                isSuperAdmin ? data.tenantId : undefined
+            const newRun = await ingestionRunService.startRunFromSession(
+                {
+                    source_system_id: data.sourceId,
+                    upload_session_id: data.sessionId,
+                    triggered_by: "user",
+                },
+                tId,
             );
-            
-            if (data.file) {
-                await uploadService.uploadToIngestionRun(
-                    newRun.id,
-                    data.file,
-                    isSuperAdmin ? data.tenantId : undefined,
-                );
-            }
-            
-            await loadData();
+
             setShowModal(false);
+            await loadData();
+            setViewRun(newRun);
+
+            await ingestionRunService.waitForRun(newRun.id, tId, {
+                intervalMs: 3000,
+                timeoutMs: 240_000,
+                onTick: (updated) => setViewRun(updated),
+            });
+            await loadData();
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            if (msg.includes("SuperAdmin must provide a specific tenant_id")) {
+            if (msg.includes("SuperAdmin must provide")) {
                 setIsSuperAdmin(true);
-                alert("Platform Admin detected. Please select a 'Target Tenant' in the form and try again.");
+                alert("Platform Admin: select a target tenant, then try again.");
+                return;
+            }
+            if (msg.includes("no files") || msg.includes("Upload session has no files")) {
+                alert("That session has no files. Upload data on the Upload Data screen first.");
                 return;
             }
             alert(msg);
         } finally {
-            setLoading(false);
+            setStarting(false);
+        }
+    };
+
+    const goToRawLanding = (runId: string) => {
+        navigate(`/raw-landing?runId=${encodeURIComponent(runId)}`);
+    };
+
+    const handleDeleteRun = async (run: IngestionRunRecord) => {
+        if (run.state === "RUNNING") {
+            alert("This run is still processing. Wait for it to finish or cancel it first.");
+            return;
+        }
+        if (!window.confirm("Delete this ingestion run and all of its raw and staging records? This cannot be undone.")) {
+            return;
+        }
+        const tId = isSuperAdmin ? activeTenantId ?? undefined : (activeTenantId ?? undefined);
+        setDeletingRunId(run.id);
+        try {
+            await ingestionRunService.deleteRun(run.id, tId);
+            if (viewRun?.id === run.id) setViewRun(null);
+            await loadData();
+        } catch (err) {
+            alert(err instanceof Error ? err.message : "Failed to delete run");
+        } finally {
+            setDeletingRunId(null);
         }
     };
 
@@ -491,7 +667,7 @@ function IngestionRuns(): React.ReactElement {
                         Ingestion Runs 
                         {isSuperAdmin && <span style={{ marginLeft: 12, fontSize: 11, background: "var(--blue-500)", color: "#fff", padding: "2px 8px", borderRadius: 4, verticalAlign: "middle", letterSpacing: 0.5 }}>PLATFORM VIEW</span>}
                     </h1>
-                    <p className="ir-page-subtitle">Monitor ingestion execution and processing status</p>
+                    <p className="ir-page-subtitle">Start runs from Upload Data sessions, then track raw load and staging</p>
                 </div>
                 <div className="ir-page-header__actions">
                     <div className="ir-refresh-badge">
@@ -554,6 +730,8 @@ function IngestionRuns(): React.ReactElement {
                             <tr>
                                 <th>Run ID</th>
                                 <th>Source System</th>
+                                <th>Entity</th>
+                                <th>Run Type</th>
                                 <th>Status</th>
                                 <th>Files</th>
                                 <th>Records</th>
@@ -564,7 +742,7 @@ function IngestionRuns(): React.ReactElement {
                         </thead>
                         <tbody>
                             {filtered.length === 0 ? (
-                                <tr><td colSpan={8} className="ir-table-empty"><span>📋</span><p>No ingestion runs found</p></td></tr>
+                                <tr><td colSpan={10} className="ir-table-empty"><span>📋</span><p>No ingestion runs found</p></td></tr>
                             ) : filtered.map(run => (
                                 <tr key={run.id} className="ir-table-row" onClick={() => setViewRun(run)}>
                                     <td><code className="ir-run-id">{run.id.slice(0, 8)}…</code></td>
@@ -574,6 +752,8 @@ function IngestionRuns(): React.ReactElement {
                                             <span className="ir-source-name">{run.sourceName}</span>
                                         </div>
                                     </td>
+                                    <td><span className="ir-entity-chip">{run.entityType || "—"}</span></td>
+                                    <td><span className="ir-run-type">{run.runType || "—"}</span></td>
                                     <td><StatusBadge status={run.state} /></td>
                                     <td><span className="ir-count-cell">{run.fileCount}</span></td>
                                     <td><span className="ir-count-cell">{run.recordCount > 0 ? run.recordCount.toLocaleString() : <span className="ir-count-cell--muted">—</span>}</span></td>
@@ -581,7 +761,16 @@ function IngestionRuns(): React.ReactElement {
                                     <td><span className={run.completedAt ? "ir-ts" : "ir-ts-na"}>{run.completedAt || "—"}</span></td>
                                     <td onClick={(e: React.MouseEvent) => e.stopPropagation()}>
                                         <div className="ir-action-row">
-                                            <button className="ir-action-btn ir-action-btn--primary" onClick={() => setViewRun(run)}>Details</button>
+                                            <button type="button" className="ir-action-btn ir-action-btn--primary" onClick={() => setViewRun(run)}>Details</button>
+                                            <button
+                                                type="button"
+                                                className="ir-action-btn ir-action-btn--danger"
+                                                disabled={deletingRunId === run.id || run.state === "RUNNING"}
+                                                title={run.state === "RUNNING" ? "Cannot delete while pipeline is running" : "Delete run and all raw/staging data"}
+                                                onClick={() => void handleDeleteRun(run)}
+                                            >
+                                                {deletingRunId === run.id ? "…" : "Delete"}
+                                            </button>
                                         </div>
                                     </td>
                                 </tr>
@@ -592,7 +781,13 @@ function IngestionRuns(): React.ReactElement {
             </div>
 
             {/* Run Details Drawer */}
-            {viewRun && <RunDetailsDrawer run={viewRun} onClose={() => setViewRun(null)} />}
+            {viewRun && (
+                <RunDetailsDrawer
+                    run={viewRun}
+                    onClose={() => setViewRun(null)}
+                    onViewRawLanding={goToRawLanding}
+                />
+            )}
 
             {/* Start Ingestion Modal */}
             {showModal && (
@@ -602,6 +797,9 @@ function IngestionRuns(): React.ReactElement {
                     sources={sources}
                     tenants={[]}
                     isSuperAdmin={isSuperAdmin}
+                    activeTenantId={activeTenantId}
+                    initialSessionId={sessionIdFromUrl}
+                    submitting={starting}
                 />
             )}
         </div>

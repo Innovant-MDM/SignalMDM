@@ -32,9 +32,14 @@ class RawRecordListItem(BaseModel):
     source_record_id: str = Field(
         description="Business key from payload (id / externalId) or row index fallback.",
     )
+    ingestion_entity_type: Optional[str] = Field(
+        default=None,
+        description="Entity resolved at ingestion start (from upload session domain).",
+    )
+    run_type: Optional[str] = None
     entity_display: str = Field(
         default="RECORD",
-        description="Hint from source supported_entities or staging mapped_entity_type.",
+        description="Best label: staging mapped type, ingestion entity, or source default.",
     )
     has_staging: bool = False
     mapped_entity_type: Optional[str] = None
