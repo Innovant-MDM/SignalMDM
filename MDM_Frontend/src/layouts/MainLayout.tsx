@@ -36,7 +36,7 @@ const NAV: NavGroup[] = [
     group: 'Platform',
     platformOnly: true,
     items: [
-      { label: 'Tenants',        path: '/tenants',       icon: '🏢', screen: 'platform' },
+      { label: 'Tenants',        path: '/tenants',       icon: '🏢', screen: 'tenants' },
       { label: 'Platform Users', path: '/platform-rbac', icon: '👥', screen: 'platform', superAdminOnly: true },
     ],
   },
@@ -66,7 +66,7 @@ export default function MainLayout() {
     return {
       ...group,
       items: group.items.filter(item => {
-        if (item.superAdminOnly && !isSuperAdmin) return false;
+        if (item.superAdminOnly) return isSuperAdmin;
         return canAccess(item.screen, 'view');
       }),
     };
