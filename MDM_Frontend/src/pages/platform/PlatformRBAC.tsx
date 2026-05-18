@@ -376,7 +376,7 @@ function RolesTab() {
   const screenLabels: Record<string, string> = {
     dashboard: 'Dashboard', sources: 'Source Systems', ingestion: 'Ingestion Runs',
     upload: 'Upload Data', raw_landing: 'Raw Landing', staging: 'Staging Records',
-    api_logs: 'API Logs', system_health: 'System Health', platform: 'Platform Admin',
+    api_logs: 'API Logs', system_health: 'System Health', tenants: 'Tenants', platform: 'Platform Admin',
   };
 
   if (loading) return <div className="rbac-empty"><div className="spinner" /></div>;
