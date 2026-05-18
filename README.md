@@ -465,3 +465,24 @@ npm run serve
 | `TOKEN_ENCRYPTION_KEY` must be 64 hex chars | Run `python -c "import secrets; print(secrets.token_hex(32))"` |
 | Celery not receiving tasks on Windows | Use `--pool=solo` flag |
 | `UnicodeEncodeError` in terminal | Run `chcp 65001` to switch to UTF-8 code page |
+
+---
+
+## 10 — Advanced Systems Architecture
+
+### 10.1 Global Redis Tenant Configuration
+
+SignalMDM utilizes a high-performance, memory-efficient global tenant scoping system to completely eliminate repetitive UI-level drop-downs and redundant API queries:
+
+*   **Redis Scoping Layer (`tcfg:{admin_id}`)**: Active scopes are persisted directly in Redis with an 8-hour TTL, ensuring single-digit millisecond scope resolution times.
+*   **Persistent Scope Pill (`TenantScopeBar.tsx`)**: Renders on the global top-bar for platform administrators. Allows toggling globally between "All Tenants" and a specific search-selected tenant.
+*   **Reactive Scoping Hook (`useTenantConfig`)**: Dashboard pages (`IngestionRuns`, `SourceSystems`, `RawLanding`, `StagingRecords`) register for updates via this context. The data loader automatically re-triggers whenever the global tenant scope switches.
+
+### 10.2 Platform Role-Based Access Control (RBAC)
+
+The platform implements a highly flexible, secure database-driven RBAC architecture to delegate screen-level and feature-level control:
+
+*   **Granular Schema**: Defined by `platform_role`, `platform_permission` (mapping `screen_key` and `feature_key` configurations), and `platform_role_permission` junction entries.
+*   **Stale-While-Revalidate Caching (SWR)**: Navigation contexts leverage `sessionStorage` (`perms_v1`) for instant UI rendering, combined with a background fetch thread (`GET /platform/my-permissions`) to automatically merge server-side permission updates.
+*   **Layout Safety Overrides**: Key configuration portals (like `/platform-rbac`) bypass permission-checks for `Super Admins` (`superAdminOnly`), guaranteeing that root administrators are never locked out of user management.
+*   **Session Isolation**: Explicit cache evictions (`evictPermissionsCache()` and `tenantConfigService.clearCache()`) are linked to the global logout handler to prevent session leakage.
