@@ -67,10 +67,20 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
       return;
     }
-    // Use cache on first load
-    if (!force) {
-      const cached = cacheRead();
-      if (cached) { setPermMap(cached); setIsLoading(false); return; }
+    // Stale-While-Revalidate: render cached instantly, then sync in background
+    const cached = cacheRead();
+    if (cached && !force) {
+      setPermMap(cached);
+      setIsLoading(false);
+      // Background validation
+      api.get<{ permissions: PermMap }>('/platform/my-permissions')
+        .then(res => {
+          const map = res.data?.permissions ?? {};
+          setPermMap(map);
+          cacheWrite(map);
+        })
+        .catch(() => {});
+      return;
     }
     setIsLoading(true);
     try {
