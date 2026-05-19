@@ -28,14 +28,38 @@ interface FormErrors {
 }
 
 const DEFAULT_PRIORITY: Partial<Record<EntityType, PriorityRow[]>> = {
-  CUSTOMER: [{ attribute: 'customer_name', priority: 1 }, { attribute: 'email', priority: 1 }, { attribute: 'phone', priority: 2 }, { attribute: 'billing_address', priority: 3 }],
-  SUPPLIER: [{ attribute: 'supplier_name', priority: 1 }, { attribute: 'tax_id', priority: 1 }, { attribute: 'contact_email', priority: 2 }],
-  PRODUCT: [{ attribute: 'product_name', priority: 1 }, { attribute: 'sku', priority: 1 }, { attribute: 'category', priority: 2 }],
-  ACCOUNT: [{ attribute: 'account_name', priority: 1 }, { attribute: 'account_number', priority: 1 }, { attribute: 'currency', priority: 2 }],
-  ASSET: [{ attribute: 'asset_name', priority: 1 }, { attribute: 'asset_id', priority: 1 }, { attribute: 'location', priority: 2 }],
-  LOCATION: [{ attribute: 'location_name', priority: 1 }, { attribute: 'address', priority: 1 }, { attribute: 'region', priority: 2 }],
-  EMPLOYEE: [{ attribute: 'name', priority: 1 }, { attribute: 'employee_id', priority: 1 }, { attribute: 'department', priority: 2 }],
-  OTHER: [{ attribute: 'name', priority: 1 }, { attribute: 'description', priority: 2 }],
+  CUSTOMER: [
+    { attribute: 'customer_name', priority: 1 }, { attribute: 'email', priority: 1 }, { attribute: 'phone', priority: 2 }, { attribute: 'billing_address', priority: 3 },
+    { attribute: 'shipping_address', priority: 3 }, { attribute: 'date_of_birth', priority: 4 }, { attribute: 'loyalty_tier', priority: 4 }, { attribute: 'status', priority: 2 }, { attribute: 'created_at', priority: 5 }
+  ],
+  SUPPLIER: [
+    { attribute: 'supplier_name', priority: 1 }, { attribute: 'tax_id', priority: 1 }, { attribute: 'contact_email', priority: 2 }, { attribute: 'contact_phone', priority: 2 },
+    { attribute: 'payment_terms', priority: 3 }, { attribute: 'rating', priority: 4 }, { attribute: 'website_url', priority: 5 }, { attribute: 'supplier_status', priority: 2 }
+  ],
+  PRODUCT: [
+    { attribute: 'product_name', priority: 1 }, { attribute: 'sku', priority: 1 }, { attribute: 'category', priority: 2 }, { attribute: 'price', priority: 2 },
+    { attribute: 'stock_quantity', priority: 3 }, { attribute: 'manufacturer', priority: 3 }, { attribute: 'weight', priority: 4 }, { attribute: 'dimensions', priority: 4 }, { attribute: 'is_active', priority: 2 }
+  ],
+  ACCOUNT: [
+    { attribute: 'account_name', priority: 1 }, { attribute: 'account_number', priority: 1 }, { attribute: 'currency', priority: 2 }, { attribute: 'account_type', priority: 2 },
+    { attribute: 'balance', priority: 3 }, { attribute: 'branch_code', priority: 3 }, { attribute: 'swift_code', priority: 4 }, { attribute: 'opened_date', priority: 4 }
+  ],
+  ASSET: [
+    { attribute: 'asset_name', priority: 1 }, { attribute: 'asset_id', priority: 1 }, { attribute: 'location', priority: 2 }, { attribute: 'purchase_date', priority: 3 },
+    { attribute: 'value', priority: 3 }, { attribute: 'depreciation_rate', priority: 4 }, { attribute: 'status', priority: 2 }, { attribute: 'assigned_to', priority: 3 }
+  ],
+  LOCATION: [
+    { attribute: 'location_name', priority: 1 }, { attribute: 'address', priority: 1 }, { attribute: 'region', priority: 2 }, { attribute: 'country', priority: 2 },
+    { attribute: 'postal_code', priority: 3 }, { attribute: 'latitude', priority: 4 }, { attribute: 'longitude', priority: 4 }, { attribute: 'capacity', priority: 5 }
+  ],
+  EMPLOYEE: [
+    { attribute: 'name', priority: 1 }, { attribute: 'employee_id', priority: 1 }, { attribute: 'department', priority: 2 }, { attribute: 'role', priority: 2 },
+    { attribute: 'email', priority: 2 }, { attribute: 'phone', priority: 3 }, { attribute: 'hire_date', priority: 3 }, { attribute: 'manager_id', priority: 4 }, { attribute: 'salary_band', priority: 5 }
+  ],
+  OTHER: [
+    { attribute: 'name', priority: 1 }, { attribute: 'description', priority: 2 }, { attribute: 'type', priority: 2 }, { attribute: 'status', priority: 3 },
+    { attribute: 'metadata_json', priority: 4 }, { attribute: 'created_by', priority: 5 }
+  ],
 };
 
 const CONN_FIELDS: Record<ConnectionType, { field: string; label: string; type?: string; placeholder?: string }[]> = {
@@ -241,18 +265,18 @@ export default function RegisterSourceModal({ onClose, onRegister }: Props) {
             <div className="rsm-section">
               <div className="rsm-field-grid">
                 <div className={`rsm-field${errors.sourceName ? ' rsm-field--error' : ''}`}>
-                  <label htmlFor="rsm-source-name" className="rsm-label">Source Name <span className="rsm-required">*</span></label>
+                  <label htmlFor="rsm-source-name" className="rsm-label">📝 Source Name <span className="rsm-required">*</span></label>
                   <input id="rsm-source-name" className="rsm-input" placeholder="e.g. Salesforce CRM" value={sourceName} onChange={e => setSourceName(e.target.value)} />
                   {errors.sourceName && <span className="rsm-error-msg">{errors.sourceName}</span>}
                 </div>
                 <div className={`rsm-field${errors.sourceCode ? ' rsm-field--error' : ''}`}>
-                  <label htmlFor="rsm-source-code" className="rsm-label">Source Code <span className="rsm-required">*</span><span className="rsm-hint">AUTO-GENERATED</span></label>
+                  <label htmlFor="rsm-source-code" className="rsm-label">🔑 Source Code <span className="rsm-required">*</span><span className="rsm-hint">AUTO-GENERATED</span></label>
                   <input id="rsm-source-code" className="rsm-input rsm-input--mono" placeholder="salesforce_crm" value={sourceCode}
                     onChange={e => { setCodeEdited(true); setSourceCode(e.target.value.toLowerCase().replace(/[^a-z0-9_\-]/g, '')); }} />
                   {errors.sourceCode && <span className="rsm-error-msg">{errors.sourceCode}</span>}
                 </div>
                 <div className={`rsm-field${errors.sourceType ? ' rsm-field--error' : ''}`}>
-                  <label htmlFor="rsm-source-type" className="rsm-label">Source Type <span className="rsm-required">*</span></label>
+                  <label htmlFor="rsm-source-type" className="rsm-label">🗂️ Source Type <span className="rsm-required">*</span></label>
                   <select id="rsm-source-type" className="rsm-select" value={sourceType} onChange={e => setSourceType(e.target.value as SourceType)}>
                     <option value="">— Select type —</option>
                     {SOURCE_TYPES.map(t => (
@@ -262,7 +286,7 @@ export default function RegisterSourceModal({ onClose, onRegister }: Props) {
                   {errors.sourceType && <span className="rsm-error-msg">{errors.sourceType}</span>}
                 </div>
                 <div className={`rsm-field${errors.connectionType ? ' rsm-field--error' : ''}`}>
-                  <label htmlFor="rsm-conn-type" className="rsm-label">Connection Type <span className="rsm-required">*</span></label>
+                  <label htmlFor="rsm-conn-type" className="rsm-label">🔌 Connection Type <span className="rsm-required">*</span></label>
                   <select id="rsm-conn-type" className="rsm-select" value={connectionType} onChange={e => setConnectionType(e.target.value as ConnectionType)}>
                     <option value="">— Select connection —</option>
                     {CONNECTION_TYPES.map(t => (

@@ -22,11 +22,13 @@ import os
 import time
 import uuid
 import csv
+import traceback
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Header, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Header, status, Request
 from sqlalchemy.orm import Session
 
 from signalmdm.database import SessionLocal, get_db
+from signalmdm.services.audit_service import log_action
 from signalmdm.schemas.ingestion_schema import (
     IngestionRunCreate,
     IngestionRunFromSessionCreate,
@@ -210,6 +212,7 @@ def start_ingestion_from_session(
 )
 def upload_file(
     run_id: uuid.UUID,
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
@@ -271,6 +274,20 @@ def upload_file(
         file_bytes=file_bytes,
         content_type=file.content_type or "application/octet-stream",
     )
+
+    try:
+        log_action(
+            db,
+            tenant_id=uuid.UUID(str(target_tenant)) if target_tenant != "platform" else None,
+            entity_name="IngestionUpload",
+            entity_id=file_upload.file_id,
+            operation_type="UPLOAD",
+            new_value={"filename": file.filename, "size": len(file_bytes), "status": "Success"},
+            performed_by=auth.username,
+            source_ip=request.client.host if request.client else None,
+        )
+    except Exception as e:
+        logger.error(f"Failed to log upload action: {e}")
 
     # Transition run → RUNNING and increment file count
     ingestion_service.transition_state(
@@ -361,6 +378,20 @@ def _paced_sync_pipeline(
             file_id=file_id,
             rows=rows,
         )
+        
+        try:
+            log_action(
+                db,
+                tenant_id=uuid.UUID(str(tenant_id)) if tenant_id != "platform" else None,
+                entity_name="IngestionPipeline",
+                entity_id=run_id,
+                operation_type="PROCESS_RAW",
+                new_value={"status": "Success", "records_processed": record_count},
+                performed_by="system",
+            )
+        except Exception:
+            pass
+
         ingestion_service.transition_state(
             db,
             run_id=run_id,
@@ -395,6 +426,18 @@ def _paced_sync_pipeline(
         )
     except Exception as exc:
         logger.exception("[ingestion] paced sync failed run=%s: %s", run_id, exc)
+        try:
+            log_action(
+                db,
+                tenant_id=uuid.UUID(str(tenant_id)) if tenant_id != "platform" else None,
+                entity_name="IngestionPipeline",
+                entity_id=run_id,
+                operation_type="PROCESS_ERROR",
+                new_value={"error": str(exc), "traceback": traceback.format_exc()},
+                performed_by="system",
+            )
+        except Exception:
+            pass
         try:
             ingestion_service.transition_state(
                 db,
@@ -492,6 +535,19 @@ def _ingest_session_files_pipeline(
             total_records += count
             files_processed += 1
 
+            try:
+                log_action(
+                    db,
+                    tenant_id=tenant_uuid if tenant_id != "platform" else None,
+                    entity_name="IngestionPipeline",
+                    entity_id=run_id,
+                    operation_type="PROCESS_RAW",
+                    new_value={"status": "Success", "records_processed": count, "filename": sf.original_filename},
+                    performed_by="system",
+                )
+            except Exception:
+                pass
+
         if files_processed == 0:
             raise ValueError("No session files could be parsed into raw records.")
 
@@ -530,6 +586,18 @@ def _ingest_session_files_pipeline(
         )
     except Exception as exc:
         logger.exception("[ingestion] session pipeline failed run=%s: %s", run_id, exc)
+        try:
+            log_action(
+                db,
+                tenant_id=uuid.UUID(str(tenant_id)) if tenant_id != "platform" else None,
+                entity_name="IngestionPipeline",
+                entity_id=run_id,
+                operation_type="PROCESS_ERROR",
+                new_value={"error": str(exc), "traceback": traceback.format_exc()},
+                performed_by="system",
+            )
+        except Exception:
+            pass
         try:
             ingestion_service.transition_state(
                 db,
@@ -605,6 +673,7 @@ def delete_ingestion_run(
 )
 def cancel_run(
     run_id: uuid.UUID,
+    request: Request,
     x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
     auth: TokenPayload = Depends(require_auth),
@@ -622,6 +691,21 @@ def cancel_run(
         error_message="Cancelled by user",
         performed_by=auth.user_id,
     )
+    
+    try:
+        log_action(
+            db,
+            tenant_id=uuid.UUID(str(target_tenant)) if target_tenant != "platform" else None,
+            entity_name="IngestionRun",
+            entity_id=run_id,
+            operation_type="CANCEL",
+            new_value={"status": "FAILED", "reason": "Cancelled by user"},
+            performed_by=auth.username,
+            source_ip=request.client.host if request.client else None,
+        )
+    except Exception as e:
+        logger.error(f"Failed to log cancel action: {e}")
+        
     return ok(message="Ingestion run cancelled.")
 
 

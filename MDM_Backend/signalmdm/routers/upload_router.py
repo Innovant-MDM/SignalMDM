@@ -27,13 +27,15 @@ import logging
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, Header, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Header, Query, UploadFile, status, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi import Form
 from sqlalchemy.orm import Session
 
 from signalmdm.database import get_db
 from signalmdm.middleware.auth import TokenPayload, require_auth
 from signalmdm.models.upload_session import UploadSession, UploadSessionFile
+from signalmdm.services.audit_service import log_action
 from signalmdm.schemas.common import ok
 from signalmdm.schemas.upload_schema import (
     UploadSessionCreate,
@@ -280,6 +282,7 @@ def get_session(
 )
 async def upload_files_to_session(
     session_id: uuid.UUID,
+    request: Request,
     files: list[UploadFile] = File(...),
     file_labels: list[str] = Form(..., description="Labels for each file (same order as files)"),
     x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
@@ -379,6 +382,21 @@ async def upload_files_to_session(
         db.flush()  # get file_id without committing
         saved.append(_file_read(sf))
 
+        try:
+            log_action(
+                db,
+                tenant_id=uuid.UUID(str(target_tenant)) if target_tenant != "platform" else None,
+                entity_name="UploadSessionFile",
+                entity_id=sf.file_id,
+                operation_type="UPLOAD",
+                new_value={"filename": fname, "size": len(file_bytes), "status": "Success"},
+                performed_by=auth.username,
+                source_ip=request.client.host if request.client else None,
+                autocommit=False,
+            )
+        except Exception as e:
+            logger.error(f"Failed to write audit log: {e}")
+
     db.commit()
 
     return ok(
@@ -398,6 +416,7 @@ async def upload_files_to_session(
 def delete_file(
     session_id: uuid.UUID,
     file_id: uuid.UUID,
+    request: Request,
     x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
     auth: TokenPayload = Depends(require_auth),
@@ -426,7 +445,24 @@ def delete_file(
     except OSError as exc:
         logger.warning("[upload] Could not delete file from disk: %s", exc)
 
+    old_val = jsonable_encoder(_file_read(sf))
     db.delete(sf)
+    
+    try:
+        log_action(
+            db,
+            tenant_id=uuid.UUID(str(target_tenant)) if target_tenant != "platform" else None,
+            entity_name="UploadSessionFile",
+            entity_id=file_id,
+            operation_type="DELETE",
+            old_value=old_val,
+            performed_by=auth.username,
+            source_ip=request.client.host if request.client else None,
+            autocommit=False,
+        )
+    except Exception as e:
+        logger.error(f"Failed to write audit log: {e}")
+
     db.commit()
 
     return ok(message="File removed from session.")

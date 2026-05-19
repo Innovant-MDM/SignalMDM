@@ -12,6 +12,7 @@ desktop.ini
 .env
 venv/
 .storage/
+.storage/uploads/
 requirements.txt
 # Dependencies
 node_modules
