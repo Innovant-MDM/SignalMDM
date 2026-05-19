@@ -937,3 +937,59 @@
     opacity: .4;
     cursor: not-allowed;
 }
+
+/* ── Duplicate-record markers ───────────────────────────────── */
+.sr-dup-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.sr-dup-scope {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 99px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    background: var(--amber-100);
+    color: #b45309;
+    width: fit-content;
+}
+
+.sr-dup-scope--CROSS_RUN {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.sr-dup-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.sr-dup-meta__strong {
+    color: #b45309;
+    font-weight: 600;
+}
+
+.sr-row--dup {
+    background: rgba(254, 243, 199, 0.25);
+}
+
+.sr-dup-callout {
+    background: rgba(254, 243, 199, 0.5);
+    border: 1px solid var(--amber-500);
+    border-radius: var(--r-sm);
+    padding: 10px 12px;
+    color: #92400e;
+    font-size: 12.5px;
+    line-height: 1.5;
+    margin-bottom: 12px;
+}
+
+.sr-dup-callout__title {
+    font-weight: 700;
+    margin-bottom: 4px;
+}

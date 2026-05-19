@@ -7,6 +7,7 @@ import {
     ingestionRunService,
     describeResolvedConfig,
     type IngestionResolvedConfig,
+    type IngestionRunFileRead,
     type IngestionRunRecord,
     type RunStatus,
 } from '../../services/ingestionRunService';
@@ -14,6 +15,7 @@ import { uploadSessionService, type UploadSession } from '../../services/uploadS
 import { sourceService, type SourceRecord } from '../../services/sourceService';
 import { authService } from '../../services/authService';
 import { useTenantConfig } from '../../context/TenantConfigContext';
+import TenantBreadcrumb from '../../components/TenantBreadcrumb';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES
@@ -339,27 +341,70 @@ function StartIngestionModal({
 /* ═══════════════════════════════════════════════════════════════
    RUN DETAILS DRAWER
 ═══════════════════════════════════════════════════════════════ */
-type DrawerTab = "overview" | "timeline" | "errors";
+type DrawerTab = "overview" | "files" | "timeline" | "errors";
 
 interface RunDetailsDrawerProps {
     run: IngestionRunRecord;
+    tenantIdForApi: string | undefined;
+    isSuperAdmin: boolean;
     onClose: () => void;
     onViewRawLanding: (runId: string) => void;
 }
 
-function RunDetailsDrawer({ run, onClose, onViewRawLanding }: RunDetailsDrawerProps): React.ReactElement {
+function formatFriendlyDate(iso: string | null): string {
+    if (!iso) return '—';
+    const d = new Date(iso.replace(' ', 'T'));
+    if (Number.isNaN(d.getTime())) return iso;
+    const hour = d.getHours();
+    const min = d.getMinutes().toString().padStart(2, '0');
+    const sec = d.getSeconds().toString().padStart(2, '0');
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    const day = d.getDate().toString().padStart(2, '0');
+    const month = (d.getMonth() + 1).toString().padStart(2, '0');
+    const year = d.getFullYear();
+    return `${hour12}:${min}:${sec} ${ampm} ${day}/${month}/${year}`;
+}
+
+function formatBytes(n: number | null | undefined): string {
+    if (n == null) return '—';
+    if (n < 1024) return `${n} B`;
+    if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1048576).toFixed(2)} MB`;
+}
+
+function RunDetailsDrawer({ run, tenantIdForApi, isSuperAdmin, onClose, onViewRawLanding }: RunDetailsDrawerProps): React.ReactElement {
     const [tab, setTab] = useState<DrawerTab>("overview");
     const [isCancelling, setIsCancelling] = useState(false);
+    const [files, setFiles] = useState<IngestionRunFileRead[] | null>(null);
+    const [filesLoading, setFilesLoading] = useState(false);
+    const [filesError, setFilesError] = useState<string | null>(null);
     const timeline: TimelineItem[] = RUN_TIMELINES[run.state] || RUN_TIMELINES["CREATED"];
     const errors: RunError[] = RUN_ERRORS[run.state] || [];
+
+    useEffect(() => {
+        if (tab !== 'files' || files != null) return;
+        let cancelled = false;
+        setFilesLoading(true);
+        setFilesError(null);
+        ingestionRunService
+            .listRunFiles(run.id, tenantIdForApi)
+            .then((rows) => { if (!cancelled) setFiles(rows); })
+            .catch((err) => {
+                if (!cancelled) setFilesError(err instanceof Error ? err.message : 'Failed to load files');
+            })
+            .finally(() => { if (!cancelled) setFilesLoading(false); });
+        return () => { cancelled = true; };
+    }, [tab, files, run.id, tenantIdForApi]);
+
+    const duplicateFileCount = files ? files.filter((f) => f.is_duplicate).length : 0;
+    const deletedFileCount = files ? files.filter((f) => f.deleted_at).length : 0;
 
     const handleCancel = async () => {
         if (!window.confirm("Are you sure you want to stop this ingestion run?")) return;
         setIsCancelling(true);
         try {
-            const adminInfo = authService.getAdminInfoFromCookie();
-            const tId = adminInfo?.tenant_id === 'platform' ? (window as any).activeTenantId : undefined;
-            await ingestionRunService.cancelRun(run.id, tId);
+            await ingestionRunService.cancelRun(run.id, tenantIdForApi);
             onClose();
         } catch (err) {
             alert(err instanceof Error ? err.message : "Failed to cancel run");
@@ -380,9 +425,31 @@ function RunDetailsDrawer({ run, onClose, onViewRawLanding }: RunDetailsDrawerPr
                 </div>
 
                 <div className="ir-drawer-tabs">
-                    {([["overview", "Overview"], ["timeline", "Timeline"], ["errors", "Errors"]] as [DrawerTab, string][]).map(([key, label]) => (
+                    {([
+                        ["overview", "Overview"],
+                        ["files", "Files"],
+                        ["timeline", "Timeline"],
+                        ["errors", "Errors"],
+                    ] as [DrawerTab, string][]).map(([key, label]) => (
                         <button key={key} className={`ir-drawer-tab${tab === key ? " ir-drawer-tab--active" : ""}`} onClick={() => setTab(key)}>
-                            {label}{key === "errors" && errors.length > 0 && <span style={{ marginLeft: 4, background: "var(--red-500)", color: "#fff", borderRadius: 99, fontSize: 10, padding: "1px 5px", fontWeight: 700 }}>{errors.length}</span>}
+                            {label}
+                            {key === "errors" && errors.length > 0 && <span style={{ marginLeft: 4, background: "var(--red-500)", color: "#fff", borderRadius: 99, fontSize: 10, padding: "1px 5px", fontWeight: 700 }}>{errors.length}</span>}
+                            {key === "files" && (duplicateFileCount > 0 || deletedFileCount > 0) && (
+                                <span
+                                    style={{
+                                        marginLeft: 4,
+                                        background: duplicateFileCount > 0 ? "var(--amber-500)" : "var(--red-500)",
+                                        color: "#fff",
+                                        borderRadius: 99,
+                                        fontSize: 10,
+                                        padding: "1px 5px",
+                                        fontWeight: 700,
+                                    }}
+                                    title={`${duplicateFileCount} duplicate · ${deletedFileCount} deleted`}
+                                >
+                                    {duplicateFileCount + deletedFileCount}
+                                </span>
+                            )}
                         </button>
                     ))}
                 </div>
@@ -392,6 +459,12 @@ function RunDetailsDrawer({ run, onClose, onViewRawLanding }: RunDetailsDrawerPr
                     {tab === "overview" && (
                         <div className="ir-drawer__content">
                             <div className="ir-drawer__grid">
+                                <div className="ir-drawer__field">
+                                    <span className="ir-drawer__field-label">Tenant</span>
+                                    <span className="ir-drawer__field-value">
+                                        {run.tenantName || run.tenantId.slice(0, 8) + "…"}
+                                    </span>
+                                </div>
                                 <div className="ir-drawer__field">
                                     <span className="ir-drawer__field-label">Status</span>
                                     <StatusBadge status={run.state} />
@@ -405,6 +478,10 @@ function RunDetailsDrawer({ run, onClose, onViewRawLanding }: RunDetailsDrawerPr
                                 <div className="ir-drawer__field">
                                     <span className="ir-drawer__field-label">Trigger</span>
                                     <span className="ir-drawer__field-value">{run.triggerType || "—"}</span>
+                                </div>
+                                <div className="ir-drawer__field">
+                                    <span className="ir-drawer__field-label">Initiated By</span>
+                                    <span className="ir-drawer__field-value">{run.initiatedBy || run.triggeredBy || "—"}</span>
                                 </div>
                                 <div className="ir-drawer__field">
                                     <span className="ir-drawer__field-label">Started At</span>
@@ -435,6 +512,104 @@ function RunDetailsDrawer({ run, onClose, onViewRawLanding }: RunDetailsDrawerPr
                                     <span className="ir-drawer__field-label" style={{ color: "var(--red-500)", display: "block", marginBottom: 4 }}>Error Message</span>
                                     <p style={{ margin: 0, fontSize: 13, color: "var(--text-primary)" }}>{run.errorMessage}</p>
                                 </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Files tab */}
+                    {tab === "files" && (
+                        <div className="ir-drawer__content">
+                            {filesLoading && (
+                                <div className="ir-files-empty">⏳ Loading files…</div>
+                            )}
+                            {filesError && !filesLoading && (
+                                <div className="ir-files-empty" style={{ color: "var(--red-500)" }}>{filesError}</div>
+                            )}
+                            {!filesLoading && !filesError && files != null && files.length === 0 && (
+                                <div className="ir-files-empty">No files attached to this run.</div>
+                            )}
+                            {!filesLoading && !filesError && files != null && files.length > 0 && (
+                                <>
+                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                                        <span className="ir-file-badge ir-file-badge--ok">{files.length} file{files.length !== 1 ? "s" : ""}</span>
+                                        {duplicateFileCount > 0 && (
+                                            <span className="ir-file-badge ir-file-badge--dup">⚠ {duplicateFileCount} duplicate{duplicateFileCount !== 1 ? "s" : ""}</span>
+                                        )}
+                                        {deletedFileCount > 0 && (
+                                            <span className="ir-file-badge ir-file-badge--deleted">🗑 {deletedFileCount} deleted</span>
+                                        )}
+                                    </div>
+                                    <div className="ir-files-table-wrap">
+                                        <table className="ir-files-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>File</th>
+                                                    <th>Size</th>
+                                                    <th>Uploaded by</th>
+                                                    <th>Uploaded at</th>
+                                                    <th>Status</th>
+                                                    <th>Deletion</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {files.map((f) => {
+                                                    const isDeleted = !!f.deleted_at;
+                                                    return (
+                                                        <tr
+                                                            key={f.file_id}
+                                                            className={isDeleted ? "ir-files-table__row--deleted" : undefined}
+                                                        >
+                                                            <td>
+                                                                <div className="ir-files-table__filename">{f.original_filename}</div>
+                                                                <div className="ir-files-table__meta">
+                                                                    {f.content_type || "file"} · {f.checksum_md5 ? f.checksum_md5.slice(0, 10) + "…" : "no checksum"}
+                                                                </div>
+                                                                {f.is_duplicate && (
+                                                                    <div className="ir-dup-note">
+                                                                        <span className="ir-dup-note__strong">⚠ Duplicate upload.</span>{" "}
+                                                                        First uploaded by{" "}
+                                                                        <span className="ir-dup-note__strong">{f.first_uploaded_by || "unknown"}</span>
+                                                                        {f.first_uploaded_at ? <> on <span className="ir-dup-note__strong">{formatFriendlyDate(f.first_uploaded_at)}</span></> : null}
+                                                                        {f.first_uploaded_run_id ? <> (run <code>{f.first_uploaded_run_id.slice(0, 8)}…</code>)</> : null}.
+                                                                    </div>
+                                                                )}
+                                                            </td>
+                                                            <td>{formatBytes(f.file_size_bytes)}</td>
+                                                            <td>
+                                                                <span className="ir-files-table__user">{f.uploaded_by || "—"}</span>
+                                                            </td>
+                                                            <td>
+                                                                <span className="ir-files-table__meta">{formatFriendlyDate(f.uploaded_at)}</span>
+                                                            </td>
+                                                            <td>
+                                                                {isDeleted ? (
+                                                                    <span className="ir-file-badge ir-file-badge--deleted">DELETED</span>
+                                                                ) : f.is_duplicate ? (
+                                                                    <span className="ir-file-badge ir-file-badge--dup">DUPLICATE</span>
+                                                                ) : (
+                                                                    <span className="ir-file-badge ir-file-badge--ok">ACTIVE</span>
+                                                                )}
+                                                            </td>
+                                                            <td>
+                                                                {isDeleted ? (
+                                                                    <>
+                                                                        <div className="ir-files-table__user">{f.deleted_by || "unknown"}</div>
+                                                                        <div className="ir-files-table__meta">{formatFriendlyDate(f.deleted_at)}</div>
+                                                                    </>
+                                                                ) : (
+                                                                    <span className="ir-files-table__meta">—</span>
+                                                                )}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <p className="ir-files-table__meta" style={{ marginTop: 10 }}>
+                                        Upload and deletion history comes from the audit log. Duplicate detection compares MD5 checksum across all files within {isSuperAdmin && run.tenantName ? <strong>{run.tenantName}</strong> : "this tenant"}.
+                                    </p>
+                                </>
                             )}
                         </div>
                     )}
@@ -660,6 +835,9 @@ function IngestionRuns(): React.ReactElement {
 
     return (
         <div className="ir-page">
+            {/* Tenant hierarchy breadcrumb */}
+            <TenantBreadcrumb screen="Ingestion Runs" />
+
             {/* Header */}
             <div className="ir-page-header">
                 <div>
@@ -729,6 +907,7 @@ function IngestionRuns(): React.ReactElement {
                         <thead>
                             <tr>
                                 <th>Run ID</th>
+                                {isSuperAdmin && <th>Tenant</th>}
                                 <th>Source System</th>
                                 <th>Entity</th>
                                 <th>Run Type</th>
@@ -742,10 +921,20 @@ function IngestionRuns(): React.ReactElement {
                         </thead>
                         <tbody>
                             {filtered.length === 0 ? (
-                                <tr><td colSpan={10} className="ir-table-empty"><span>📋</span><p>No ingestion runs found</p></td></tr>
+                                <tr><td colSpan={isSuperAdmin ? 11 : 10} className="ir-table-empty"><span>📋</span><p>No ingestion runs found</p></td></tr>
                             ) : filtered.map(run => (
                                 <tr key={run.id} className="ir-table-row" onClick={() => setViewRun(run)}>
                                     <td><code className="ir-run-id">{run.id.slice(0, 8)}…</code></td>
+                                    {isSuperAdmin && (
+                                        <td>
+                                            <span
+                                                className={`ir-tenant-chip${run.tenantName ? "" : " ir-tenant-chip--muted"}`}
+                                                title={run.tenantId}
+                                            >
+                                                🏢 {run.tenantName || run.tenantId.slice(0, 8) + "…"}
+                                            </span>
+                                        </td>
+                                    )}
                                     <td>
                                         <div className="ir-source-cell">
                                             <div className="ir-source-avatar">{run.sourceName.slice(0, 2).toUpperCase()}</div>
@@ -784,6 +973,8 @@ function IngestionRuns(): React.ReactElement {
             {viewRun && (
                 <RunDetailsDrawer
                     run={viewRun}
+                    tenantIdForApi={isSuperAdmin ? (activeTenantId ?? viewRun.tenantId) : (activeTenantId ?? undefined)}
+                    isSuperAdmin={isSuperAdmin}
                     onClose={() => setViewRun(null)}
                     onViewRawLanding={goToRawLanding}
                 />

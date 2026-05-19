@@ -18,6 +18,7 @@ class RawRecordListItem(BaseModel):
 
     raw_record_id: uuid.UUID
     tenant_id: uuid.UUID
+    tenant_name: Optional[str] = None
     run_id: uuid.UUID
     source_system_id: uuid.UUID
     source_name: str = Field(description="Display name from source_systems.")
@@ -43,5 +44,18 @@ class RawRecordListItem(BaseModel):
     )
     has_staging: bool = False
     mapped_entity_type: Optional[str] = None
+    # Duplicate-record context (cross-run within the same tenant)
+    is_duplicate: bool = False
+    duplicate_scope: Optional[str] = Field(
+        default=None,
+        description="WITHIN_RUN | CROSS_RUN — only set when is_duplicate is true.",
+    )
+    duplicate_of_raw_record_id: Optional[uuid.UUID] = None
+    duplicate_of_run_id: Optional[uuid.UUID] = None
+    first_seen_by: Optional[str] = Field(
+        default=None,
+        description="Username who initiated the run that first inserted this checksum for the tenant.",
+    )
+    first_seen_at: Optional[datetime] = None
 
     model_config = {"from_attributes": False}

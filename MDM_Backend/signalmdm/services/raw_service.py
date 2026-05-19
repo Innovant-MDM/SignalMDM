@@ -22,6 +22,7 @@ from signalmdm.models.ingestion_run import IngestionRun
 from signalmdm.models.raw_record import RawRecord
 from signalmdm.models.source_system import SourceSystem
 from signalmdm.models.staging_entity import StagingEntity
+from signalmdm.models.tenant import Tenant
 from utils.checksum import generate_checksum, generate_file_checksum
 
 
@@ -227,6 +228,61 @@ class RawService:
         )
         staging_by_raw = {s.raw_record_id: s for s in staging_list}
 
+        # ── tenant name lookup (for platform-admin row chips) ──
+        page_tenant_ids = {r[0].tenant_id for r in rows}
+        tenant_name_by_id: dict[uuid.UUID, str] = {}
+        if page_tenant_ids:
+            tenant_name_by_id = {
+                tid: name
+                for tid, name in db.query(Tenant.tenant_id, Tenant.tenant_name)
+                .filter(Tenant.tenant_id.in_(page_tenant_ids))
+                .all()
+            }
+
+        # ── cross-run duplicate detection (tenant + checksum) ──
+        # For every (tenant_id, checksum) on this page, find the earliest
+        # raw_record_id in the whole tenant — that's the original. Any later
+        # record with the same checksum is a duplicate (CROSS_RUN when it
+        # lives in a different run than the original; WITHIN_RUN otherwise).
+        page_keys: set[tuple[uuid.UUID, str]] = {
+            (r[0].tenant_id, r[0].checksum_md5)
+            for r in rows
+            if r[0].checksum_md5
+        }
+        originals: dict[tuple[uuid.UUID, str], RawRecord] = {}
+        if page_keys:
+            tenants_on_page = {k[0] for k in page_keys}
+            checksums_on_page = {k[1] for k in page_keys}
+            candidates: list[RawRecord] = (
+                db.query(RawRecord)
+                .filter(
+                    RawRecord.tenant_id.in_(tenants_on_page),
+                    RawRecord.checksum_md5.in_(checksums_on_page),
+                )
+                .order_by(RawRecord.created_at.asc(), RawRecord.row_index.asc())
+                .all()
+            )
+            for c in candidates:
+                key = (c.tenant_id, c.checksum_md5)
+                if key in page_keys and key not in originals:
+                    originals[key] = c
+
+        # Map original_run_id → metadata for "first_seen_by"
+        first_seen_run_ids = {o.run_id for o in originals.values()}
+        first_seen_meta: dict[uuid.UUID, dict[str, Optional[str]]] = {}
+        if first_seen_run_ids:
+            origin_runs = (
+                db.query(IngestionRun)
+                .filter(IngestionRun.run_id.in_(first_seen_run_ids))
+                .all()
+            )
+            for r in origin_runs:
+                meta = parse_run_metadata(r.triggered_by)
+                first_seen_meta[r.run_id] = {
+                    "initiated_by": meta.get("initiated_by"),
+                    "created_at": r.created_at,
+                }
+
         out: list[dict[str, Any]] = []
         for rr, src, run in rows:
             st = staging_by_raw.get(rr.raw_record_id)
@@ -237,10 +293,27 @@ class RawService:
             hint = mapped or ingestion_entity or self._entity_hint_from_source(src)
             run_state = str(run.state)
             status = self._processing_status(run_state, has_staging)
+
+            origin = originals.get((rr.tenant_id, rr.checksum_md5))
+            is_dup = bool(origin) and origin.raw_record_id != rr.raw_record_id
+            dup_scope: Optional[str] = None
+            dup_of_raw: Optional[uuid.UUID] = None
+            dup_of_run: Optional[uuid.UUID] = None
+            first_seen_by: Optional[str] = None
+            first_seen_at = None
+            if is_dup and origin is not None:
+                dup_scope = "CROSS_RUN" if origin.run_id != rr.run_id else "WITHIN_RUN"
+                dup_of_raw = origin.raw_record_id
+                dup_of_run = origin.run_id
+                meta = first_seen_meta.get(origin.run_id, {})
+                first_seen_by = meta.get("initiated_by")
+                first_seen_at = meta.get("created_at") or origin.created_at
+
             out.append(
                 {
                     "raw_record_id": rr.raw_record_id,
                     "tenant_id": rr.tenant_id,
+                    "tenant_name": tenant_name_by_id.get(rr.tenant_id),
                     "run_id": rr.run_id,
                     "source_system_id": rr.source_system_id,
                     "source_name": src.source_name,
@@ -255,28 +328,27 @@ class RawService:
                     "entity_display": hint,
                     "has_staging": has_staging,
                     "mapped_entity_type": mapped,
+                    "is_duplicate": is_dup,
+                    "duplicate_scope": dup_scope,
+                    "duplicate_of_raw_record_id": dup_of_raw,
+                    "duplicate_of_run_id": dup_of_run,
+                    "first_seen_by": first_seen_by,
+                    "first_seen_at": first_seen_at,
                     "_src_id": self._derive_source_record_id(rr.raw_data, rr.row_index),
                 }
             )
 
-        # Mark DUPLICATE within this page: same run + checksum_md5, keep earliest as-is
-        key_groups: dict[tuple[uuid.UUID, str], list[int]] = {}
-        for i, item in enumerate(out):
-            k = (item["run_id"], item["checksum_md5"])
-            key_groups.setdefault(k, []).append(i)
-        for _k, idxs in key_groups.items():
-            if len(idxs) <= 1:
-                continue
-            sorted_idxs = sorted(idxs, key=lambda i: out[i]["created_at"])
-            for j in sorted_idxs[1:]:
-                out[j]["processing_status"] = "DUPLICATE"
+        # Reflect duplicates in the legacy processing_status badge
+        for item in out:
+            if item["is_duplicate"]:
+                item["processing_status"] = "DUPLICATE"
 
         # Drop helper key from public payload
         for item in out:
             item["source_record_id"] = item.pop("_src_id")
 
         if exclude_duplicates:
-            out = [i for i in out if i["processing_status"] != "DUPLICATE"]
+            out = [i for i in out if not i["is_duplicate"]]
 
         return out, total
 

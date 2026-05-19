@@ -10,6 +10,7 @@ import { api, ApiError } from './api';
 export interface IngestionRunRead {
   run_id: string;
   tenant_id: string;
+  tenant_name?: string | null;
   source_system_id: string;
   state: string;
   triggered_by: string | null;
@@ -23,6 +24,7 @@ export interface IngestionRunRead {
   entity_type?: string | null;
   run_type?: string | null;
   trigger_type?: string | null;
+  initiated_by?: string | null;
 }
 
 export type RunStatus = "CREATED" | "RUNNING" | "RAW_LOADED" | "STAGING_CREATED" | "FAILED" | "COMPLETED";
@@ -30,10 +32,12 @@ export type RunStatus = "CREATED" | "RUNNING" | "RAW_LOADED" | "STAGING_CREATED"
 export interface IngestionRunRecord {
   id: string;
   tenantId: string;
+  tenantName: string | null;
   sourceId: string;
   sourceName: string;
   state: RunStatus;
   triggeredBy: string;
+  initiatedBy: string | null;
   fileCount: number;
   recordCount: number;
   errorMessage: string | null;
@@ -46,6 +50,26 @@ export interface IngestionRunRecord {
   triggerType: string | null;
 }
 
+/** GET /api/v1/ingestion/{run_id}/files response item. */
+export interface IngestionRunFileRead {
+  file_id: string;
+  run_id: string;
+  tenant_id: string;
+  original_filename: string;
+  file_size_bytes: number | null;
+  content_type: string | null;
+  checksum_md5: string | null;
+  uploaded_at: string;
+  uploaded_by: string | null;
+  deleted_at: string | null;
+  deleted_by: string | null;
+  is_duplicate: boolean;
+  first_uploaded_by: string | null;
+  first_uploaded_at: string | null;
+  first_uploaded_run_id: string | null;
+  first_uploaded_file_id: string | null;
+}
+
 /** Server resolves entity / run type / trigger when omitted. */
 export interface StartFromSessionPayload {
   source_system_id: string;
@@ -55,6 +79,8 @@ export interface StartFromSessionPayload {
 
 export interface IngestionLineageRunSummary {
   run_id: string;
+  tenant_id?: string | null;
+  tenant_name?: string | null;
   source_system_id: string;
   source_name: string;
   entity_type: string | null;
@@ -123,10 +149,12 @@ function toIngestionRunRecord(raw: IngestionRunRead, sourceNameMap: Record<strin
   return {
     id: raw.run_id,
     tenantId: raw.tenant_id,
+    tenantName: raw.tenant_name ?? null,
     sourceId: raw.source_system_id,
     sourceName: sourceNameMap[raw.source_system_id] || raw.source_system_id,
     state: raw.state as RunStatus,
     triggeredBy: raw.triggered_by || 'system',
+    initiatedBy: raw.initiated_by ?? null,
     fileCount: raw.file_count,
     recordCount: raw.record_count,
     errorMessage: raw.error_message,
@@ -242,6 +270,17 @@ export const ingestionRunService = {
   async cancelRun(runId: string, tenantId?: string): Promise<void> {
     const headers = tenantId ? { 'X-Tenant-ID': tenantId } : undefined;
     await api.post(`/ingestion/${runId}/cancel`, {}, headers);
+  },
+
+  /**
+   * GET /api/v1/ingestion/{run_id}/files
+   * Returns file uploads attached to the run with audit-derived upload/delete
+   * history and within-tenant duplicate flags.
+   */
+  async listRunFiles(runId: string, tenantId?: string): Promise<IngestionRunFileRead[]> {
+    const headers = tenantId ? { 'X-Tenant-ID': tenantId } : undefined;
+    const res = await api.get<IngestionRunFileRead[]>(`/ingestion/${runId}/files`, headers);
+    return res.data ?? [];
   },
 };
 

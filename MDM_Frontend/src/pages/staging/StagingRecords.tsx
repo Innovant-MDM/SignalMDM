@@ -10,6 +10,7 @@ import {
 import { Link, useSearchParams } from 'react-router-dom';
 
 import IngestionRunLineagePicker from '../../components/ingestion/IngestionRunLineagePicker';
+import TenantBreadcrumb from '../../components/TenantBreadcrumb';
 import { formatRunOptionLabel, resolveInitialRunId } from '../../utils/ingestionRunScope';
 import '../../styles/theme.css';
 import '../../styles/StagingRecords.css';
@@ -148,6 +149,18 @@ function RecordDrawer({ record, onClose }: RecordDrawerProps) {
                 <div className="sr-drawer__body">
                     {tab === 'overview' && (
                         <div className="sr-drawer__content">
+                            {record.isDuplicate && (
+                                <div className="sr-dup-callout">
+                                    <div className="sr-dup-callout__title">
+                                        ⚠ Duplicate record ({record.duplicateScope === 'CROSS_RUN' ? 'cross-run' : 'within run'})
+                                    </div>
+                                    This staging row was built from a raw payload whose checksum already existed in this tenant.
+                                    {' '}First added by <strong>{record.firstSeenBy || 'unknown'}</strong>
+                                    {record.firstSeenAt ? <> on <strong>{record.firstSeenAt}</strong></> : null}
+                                    {record.duplicateOfRawId ? <> (raw id <code>{record.duplicateOfRawId.slice(0, 8)}…</code></> : null}
+                                    {record.duplicateOfRawId && record.duplicateOfRunId ? <> · run <code>{record.duplicateOfRunId.slice(0, 8)}…</code>)</> : record.duplicateOfRawId ? <>)</> : null}.
+                                </div>
+                            )}
                             <div className="sr-drawer__grid">
                                 <div className="sr-drawer__field">
                                     <span className="sr-drawer__field-label">Staging ID</span>
@@ -159,6 +172,12 @@ function RecordDrawer({ record, onClose }: RecordDrawerProps) {
                                     <span className="sr-drawer__field-label">Raw Record ID</span>
                                     <span className="sr-raw-id" style={{ alignSelf: 'flex-start' }}>
                                         {record.rawId}
+                                    </span>
+                                </div>
+                                <div className="sr-drawer__field">
+                                    <span className="sr-drawer__field-label">Tenant</span>
+                                    <span className="sr-drawer__field-value">
+                                        {record.tenantName || record.tenantId.slice(0, 8) + '…'}
                                     </span>
                                 </div>
                                 <div className="sr-drawer__field">
@@ -199,6 +218,28 @@ function RecordDrawer({ record, onClose }: RecordDrawerProps) {
                                         {record.entity}
                                     </span>
                                 </div>
+                                {record.isDuplicate && (
+                                    <>
+                                        <div className="sr-drawer__field">
+                                            <span className="sr-drawer__field-label">First added by</span>
+                                            <span className="sr-drawer__field-value">{record.firstSeenBy || 'unknown'}</span>
+                                        </div>
+                                        <div className="sr-drawer__field">
+                                            <span className="sr-drawer__field-label">First added at</span>
+                                            <span className="sr-drawer__field-value" style={{ fontSize: 12.5 }}>
+                                                {record.firstSeenAt || '—'}
+                                            </span>
+                                        </div>
+                                        {record.duplicateOfStagingId && (
+                                            <div className="sr-drawer__field">
+                                                <span className="sr-drawer__field-label">Original staging ID</span>
+                                                <span className="sr-drawer__field-value sr-drawer__field-value--mono">
+                                                    {record.duplicateOfStagingId}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
                             </div>
 
                             <div>
@@ -503,6 +544,11 @@ export default function StagingRecords() {
 
     return (
         <div className="sr-page">
+            <TenantBreadcrumb
+                screen="Staging Records"
+                detail={filterRun !== 'ALL' ? `Run ${filterRun.slice(0, 8)}…` : undefined}
+            />
+
             <div className="sr-page-header">
                 <div>
                     <h1 className="sr-page-title">Staging Records</h1>
@@ -743,7 +789,11 @@ export default function StagingRecords() {
                                 paginated.map((rec) => {
                                     const dqCls = getDQClass(rec.dqScore);
                                     return (
-                                        <tr key={rec.id} className="sr-table-row" onClick={() => setViewRecord(rec)}>
+                                        <tr
+                                            key={rec.id}
+                                            className={`sr-table-row${rec.isDuplicate ? ' sr-row--dup' : ''}`}
+                                            onClick={() => setViewRecord(rec)}
+                                        >
                                             <td>
                                                 <code className="sr-stg-id">{rec.id.slice(0, 13)}…</code>
                                             </td>
@@ -762,9 +812,22 @@ export default function StagingRecords() {
                                                 <span className="sr-entity-chip">{rec.entity}</span>
                                             </td>
                                             <td>
-                                                <span className={`sr-stg-badge sr-stg-badge--${rec.stgBadgeClass}`}>
-                                                    {stagingStateDisplay(rec.stgState)}
-                                                </span>
+                                                <div className="sr-dup-cell">
+                                                    <span className={`sr-stg-badge sr-stg-badge--${rec.stgBadgeClass}`}>
+                                                        {stagingStateDisplay(rec.stgState)}
+                                                    </span>
+                                                    {rec.isDuplicate && (
+                                                        <>
+                                                            <span className={`sr-dup-scope sr-dup-scope--${rec.duplicateScope || 'WITHIN_RUN'}`}>
+                                                                {rec.duplicateScope === 'CROSS_RUN' ? 'Cross-run dup' : 'Within-run dup'}
+                                                            </span>
+                                                            <span className="sr-dup-meta">
+                                                                First by <span className="sr-dup-meta__strong">{rec.firstSeenBy || 'unknown'}</span>
+                                                                {rec.firstSeenAt ? <> on <span className="sr-dup-meta__strong">{rec.firstSeenAt}</span></> : null}
+                                                            </span>
+                                                        </>
+                                                    )}
+                                                </div>
                                             </td>
                                             <td>
                                                 <span className={`sr-val-badge sr-val-badge--${rec.valStatus}`}>

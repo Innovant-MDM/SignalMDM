@@ -1089,3 +1089,126 @@
    text-align: center;
    padding: 20px 0;
 }
+
+/* ── Per-row tenant chip (platform-admin only) ──────────────── */
+.ir-tenant-chip {
+   display: inline-flex;
+   align-items: center;
+   gap: 4px;
+   padding: 2px 8px;
+   border-radius: 99px;
+   background: var(--blue-100);
+   color: var(--blue-600);
+   border: 1px solid var(--blue-200);
+   font-size: 11px;
+   font-weight: 600;
+   max-width: 160px;
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+
+.ir-tenant-chip--muted {
+   background: var(--gray-100);
+   color: var(--gray-700);
+   border-color: var(--gray-200);
+}
+
+/* ── Files tab inside Run Details drawer ─────────────────────── */
+.ir-files-table-wrap {
+   border: 1px solid var(--border-light);
+   border-radius: var(--r-md);
+   overflow: hidden;
+}
+
+.ir-files-table {
+   width: 100%;
+   border-collapse: collapse;
+   font-size: 12.5px;
+}
+
+.ir-files-table th,
+.ir-files-table td {
+   text-align: left;
+   padding: 8px 10px;
+   border-bottom: 1px solid var(--border-light);
+   vertical-align: top;
+}
+
+.ir-files-table th {
+   background: var(--bg-elevated);
+   color: var(--text-secondary);
+   font-weight: 600;
+   font-size: 11px;
+   text-transform: uppercase;
+   letter-spacing: 0.3px;
+}
+
+.ir-files-table tr:last-child td {
+   border-bottom: none;
+}
+
+.ir-files-table__filename {
+   font-weight: 600;
+   color: var(--text-primary);
+   word-break: break-all;
+}
+
+.ir-files-table__meta {
+   font-size: 11px;
+   color: var(--text-muted);
+}
+
+.ir-files-table__user {
+   font-weight: 500;
+   color: var(--text-primary);
+}
+
+.ir-files-table__row--deleted td {
+   background: rgba(254, 226, 226, 0.4);
+}
+
+.ir-file-badge {
+   display: inline-flex;
+   align-items: center;
+   gap: 4px;
+   padding: 2px 8px;
+   border-radius: 99px;
+   font-size: 10.5px;
+   font-weight: 700;
+   text-transform: uppercase;
+   letter-spacing: 0.3px;
+}
+
+.ir-file-badge--ok {
+   background: var(--green-100);
+   color: var(--green-600);
+}
+
+.ir-file-badge--deleted {
+   background: var(--red-100);
+   color: var(--red-600);
+}
+
+.ir-file-badge--dup {
+   background: var(--amber-100);
+   color: #b45309;
+}
+
+.ir-dup-note {
+   margin-top: 4px;
+   font-size: 11px;
+   color: #b45309;
+   line-height: 1.4;
+}
+
+.ir-dup-note__strong {
+   font-weight: 700;
+}
+
+.ir-files-empty {
+   padding: 24px;
+   text-align: center;
+   color: var(--text-muted);
+   font-size: 13px;
+}

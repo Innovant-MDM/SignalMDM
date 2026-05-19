@@ -19,6 +19,7 @@ export type RawProcessingStatus =
 export interface RawRecordListRead {
   raw_record_id: string;
   tenant_id: string;
+  tenant_name?: string | null;
   run_id: string;
   source_system_id: string;
   source_name: string;
@@ -34,6 +35,12 @@ export interface RawRecordListRead {
   has_staging: boolean;
   mapped_entity_type: string | null;
   source_record_id: string;
+  is_duplicate?: boolean;
+  duplicate_scope?: 'WITHIN_RUN' | 'CROSS_RUN' | null;
+  duplicate_of_raw_record_id?: string | null;
+  duplicate_of_run_id?: string | null;
+  first_seen_by?: string | null;
+  first_seen_at?: string | null;
 }
 
 export interface RawLandingListResponse {
@@ -46,6 +53,8 @@ export interface RawLandingListResponse {
 /** UI row derived from API (stable for table + modal). */
 export interface RawLandingRecord {
   id: string;
+  tenantId: string;
+  tenantName: string | null;
   srcId: string;
   entity: string;
   ingestionEntity: string | null;
@@ -59,6 +68,12 @@ export interface RawLandingRecord {
   checksum: string;
   ingestionRunState: string;
   hasStaging: boolean;
+  isDuplicate: boolean;
+  duplicateScope: 'WITHIN_RUN' | 'CROSS_RUN' | null;
+  duplicateOfRawId: string | null;
+  duplicateOfRunId: string | null;
+  firstSeenBy: string | null;
+  firstSeenAt: string | null;
 }
 
 function asPayload(data: Record<string, unknown>): Record<string, string | number | boolean | null> {
@@ -73,12 +88,16 @@ function asPayload(data: Record<string, unknown>): Record<string, string | numbe
   return out;
 }
 
+function fmtTs(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  return iso.includes('T') ? iso.replace('T', ' ').slice(0, 19) : iso;
+}
+
 export function toRawLandingRecord(r: RawRecordListRead): RawLandingRecord {
-  const created = r.created_at.includes('T')
-    ? r.created_at.replace('T', ' ').slice(0, 19)
-    : r.created_at;
   return {
     id: r.raw_record_id,
+    tenantId: r.tenant_id,
+    tenantName: r.tenant_name ?? null,
     srcId: r.source_record_id,
     entity: r.ingestion_entity_type || r.entity_display,
     ingestionEntity: r.ingestion_entity_type,
@@ -87,11 +106,17 @@ export function toRawLandingRecord(r: RawRecordListRead): RawLandingRecord {
     runShort: `${r.run_id.slice(0, 8)}…`,
     runId: r.run_id,
     status: r.processing_status,
-    receivedAt: created,
+    receivedAt: fmtTs(r.created_at) ?? '',
     payload: asPayload(r.raw_data),
     checksum: r.checksum_md5,
     ingestionRunState: r.ingestion_run_state,
     hasStaging: r.has_staging,
+    isDuplicate: r.is_duplicate ?? r.processing_status === 'DUPLICATE',
+    duplicateScope: r.duplicate_scope ?? null,
+    duplicateOfRawId: r.duplicate_of_raw_record_id ?? null,
+    duplicateOfRunId: r.duplicate_of_run_id ?? null,
+    firstSeenBy: r.first_seen_by ?? null,
+    firstSeenAt: fmtTs(r.first_seen_at),
   };
 }
 

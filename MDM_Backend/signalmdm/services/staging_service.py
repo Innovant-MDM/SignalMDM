@@ -22,6 +22,7 @@ from signalmdm.models.raw_record import RawRecord
 from signalmdm.models.staging_entity import StagingEntity
 from signalmdm.models.source_system import SourceSystem
 from signalmdm.models.ingestion_run import IngestionRun
+from signalmdm.models.tenant import Tenant
 from signalmdm.enums import StagingStateEnum
 from signalmdm.schemas.ingestion_schema import parse_run_metadata
 
@@ -210,6 +211,71 @@ class StagingService:
             .limit(limit)
             .all()
         )
+
+        if not rows:
+            return [], total
+
+        # ── Tenant name lookup (for platform-admin row chips) ──
+        page_tenant_ids = {st.tenant_id for st, _, _, _ in rows}
+        tenant_name_by_id: dict[uuid.UUID, str] = {}
+        if page_tenant_ids:
+            tenant_name_by_id = {
+                tid: name
+                for tid, name in db.query(Tenant.tenant_id, Tenant.tenant_name)
+                .filter(Tenant.tenant_id.in_(page_tenant_ids))
+                .all()
+            }
+
+        # ── Cross-run duplicate detection (mirror raw_service logic) ──
+        page_keys: set[tuple[uuid.UUID, str]] = {
+            (raw.tenant_id, raw.checksum_md5)
+            for _st, _src, raw, _run in rows
+            if raw.checksum_md5
+        }
+        originals: dict[tuple[uuid.UUID, str], RawRecord] = {}
+        if page_keys:
+            tenants_on_page = {k[0] for k in page_keys}
+            checksums_on_page = {k[1] for k in page_keys}
+            candidates: list[RawRecord] = (
+                db.query(RawRecord)
+                .filter(
+                    RawRecord.tenant_id.in_(tenants_on_page),
+                    RawRecord.checksum_md5.in_(checksums_on_page),
+                )
+                .order_by(RawRecord.created_at.asc(), RawRecord.row_index.asc())
+                .all()
+            )
+            for c in candidates:
+                key = (c.tenant_id, c.checksum_md5)
+                if key in page_keys and key not in originals:
+                    originals[key] = c
+
+        first_seen_run_ids = {o.run_id for o in originals.values()}
+        first_seen_meta: dict[uuid.UUID, dict[str, Any]] = {}
+        if first_seen_run_ids:
+            origin_runs = (
+                db.query(IngestionRun)
+                .filter(IngestionRun.run_id.in_(first_seen_run_ids))
+                .all()
+            )
+            for r in origin_runs:
+                meta = parse_run_metadata(r.triggered_by)
+                first_seen_meta[r.run_id] = {
+                    "initiated_by": meta.get("initiated_by"),
+                    "created_at": r.created_at,
+                }
+
+        original_raw_ids = {o.raw_record_id for o in originals.values()}
+        staging_by_original_raw: dict[uuid.UUID, StagingEntity] = {}
+        if original_raw_ids:
+            origin_stagings = (
+                db.query(StagingEntity)
+                .filter(StagingEntity.raw_record_id.in_(original_raw_ids))
+                .all()
+            )
+            for s in origin_stagings:
+                staging_by_original_raw[s.raw_record_id] = s
+
         out: list[dict[str, Any]] = []
         for st, src, raw, run in rows:
             run_meta = parse_run_metadata(run.triggered_by)
@@ -222,10 +288,30 @@ class StagingService:
             src_id = self._derive_source_record_id(raw.raw_data, raw.row_index)
             dq = self._dq_score_placeholder(st.entity_data)
             state_val = st.state.value if isinstance(st.state, StagingStateEnum) else str(st.state)
+
+            origin = originals.get((raw.tenant_id, raw.checksum_md5))
+            is_dup = bool(origin) and origin.raw_record_id != raw.raw_record_id
+            dup_scope: Optional[str] = None
+            dup_of_raw: Optional[uuid.UUID] = None
+            dup_of_run: Optional[uuid.UUID] = None
+            dup_of_staging: Optional[uuid.UUID] = None
+            first_seen_by: Optional[str] = None
+            first_seen_at = None
+            if is_dup and origin is not None:
+                dup_scope = "CROSS_RUN" if origin.run_id != raw.run_id else "WITHIN_RUN"
+                dup_of_raw = origin.raw_record_id
+                dup_of_run = origin.run_id
+                origin_st = staging_by_original_raw.get(origin.raw_record_id)
+                dup_of_staging = origin_st.staging_id if origin_st else None
+                meta = first_seen_meta.get(origin.run_id, {})
+                first_seen_by = meta.get("initiated_by")
+                first_seen_at = meta.get("created_at") or origin.created_at
+
             out.append(
                 {
                     "staging_id": st.staging_id,
                     "tenant_id": st.tenant_id,
+                    "tenant_name": tenant_name_by_id.get(st.tenant_id),
                     "run_id": st.run_id,
                     "raw_record_id": st.raw_record_id,
                     "source_system_id": st.source_system_id,
@@ -242,6 +328,13 @@ class StagingService:
                     "source_record_id": src_id,
                     "dq_score": dq,
                     "validation_status": self._validation_status(st.state),
+                    "is_duplicate": is_dup,
+                    "duplicate_scope": dup_scope,
+                    "duplicate_of_raw_record_id": dup_of_raw,
+                    "duplicate_of_run_id": dup_of_run,
+                    "duplicate_of_staging_id": dup_of_staging,
+                    "first_seen_by": first_seen_by,
+                    "first_seen_at": first_seen_at,
                 }
             )
         return out, total

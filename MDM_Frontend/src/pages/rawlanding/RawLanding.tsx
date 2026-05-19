@@ -10,6 +10,7 @@ import {
 import { Link, useSearchParams } from 'react-router-dom';
 
 import IngestionRunLineagePicker from '../../components/ingestion/IngestionRunLineagePicker';
+import TenantBreadcrumb from '../../components/TenantBreadcrumb';
 import { formatRunOptionLabel, resolveInitialRunId } from '../../utils/ingestionRunScope';
 import '../../styles/theme.css';
 import '../../styles/RawLanding.css';
@@ -143,6 +144,18 @@ function PayloadModal({ record, onClose, initialTab = 'payload' }: PayloadModalP
 
                     {tab === 'metadata' && (
                         <div className="rl-meta-grid">
+                            {record.isDuplicate && (
+                                <div className="rl-meta-callout">
+                                    <div className="rl-meta-callout__title">
+                                        ⚠ Duplicate record ({record.duplicateScope === 'CROSS_RUN' ? 'cross-run' : 'within run'})
+                                    </div>
+                                    This payload has the same MD5 checksum as an earlier raw record in this tenant.
+                                    {' '}First added by <strong>{record.firstSeenBy || 'unknown'}</strong>
+                                    {record.firstSeenAt ? <> on <strong>{record.firstSeenAt}</strong></> : null}
+                                    {record.duplicateOfRawId ? <> (raw id <code>{record.duplicateOfRawId.slice(0, 8)}…</code></> : null}
+                                    {record.duplicateOfRawId && record.duplicateOfRunId ? <> · run <code>{record.duplicateOfRunId.slice(0, 8)}…</code>)</> : record.duplicateOfRawId ? <>)</> : null}.
+                                </div>
+                            )}
                             <div className="rl-meta-field">
                                 <span className="rl-meta-label">Raw Record ID</span>
                                 <span className="rl-meta-value rl-meta-value--mono">{record.id}</span>
@@ -158,6 +171,10 @@ function PayloadModal({ record, onClose, initialTab = 'payload' }: PayloadModalP
                             <div className="rl-meta-field">
                                 <span className="rl-meta-label">Source System</span>
                                 <span className="rl-meta-value">{record.source}</span>
+                            </div>
+                            <div className="rl-meta-field">
+                                <span className="rl-meta-label">Tenant</span>
+                                <span className="rl-meta-value">{record.tenantName || record.tenantId.slice(0, 8) + '…'}</span>
                             </div>
                             <div className="rl-meta-field">
                                 <span className="rl-meta-label">Ingestion Run</span>
@@ -183,6 +200,18 @@ function PayloadModal({ record, onClose, initialTab = 'payload' }: PayloadModalP
                                 <span className="rl-meta-label">Checksum (MD5)</span>
                                 <span className="rl-meta-value rl-meta-value--mono">{record.checksum}</span>
                             </div>
+                            {record.isDuplicate && (
+                                <>
+                                    <div className="rl-meta-field">
+                                        <span className="rl-meta-label">First added by</span>
+                                        <span className="rl-meta-value">{record.firstSeenBy || 'unknown'}</span>
+                                    </div>
+                                    <div className="rl-meta-field">
+                                        <span className="rl-meta-label">First added at</span>
+                                        <span className="rl-meta-value">{record.firstSeenAt || '—'}</span>
+                                    </div>
+                                </>
+                            )}
                         </div>
                     )}
                 </div>
@@ -342,6 +371,11 @@ export default function RawLanding() {
 
     return (
         <div className="rl-page">
+            <TenantBreadcrumb
+                screen="Raw Landing"
+                detail={filterRun !== 'ALL' ? `Run ${filterRun.slice(0, 8)}…` : undefined}
+            />
+
             <div className="rl-page-header">
                 <div>
                     <h1 className="rl-page-title">Raw Landing</h1>
@@ -550,7 +584,10 @@ export default function RawLanding() {
                                 </tr>
                             ) : (
                                 paginated.map((rec) => (
-                                    <tr key={rec.id} className="rl-table-row">
+                                    <tr
+                                        key={rec.id}
+                                        className={`rl-table-row${rec.isDuplicate ? ' rl-row--dup' : ''}`}
+                                    >
                                         <td>
                                             <code className="rl-raw-id">{rec.id.slice(0, 13)}…</code>
                                         </td>
@@ -570,9 +607,22 @@ export default function RawLanding() {
                                             {rec.source}
                                         </td>
                                         <td>
-                                            <span className={`rl-proc-status rl-proc-status--${rec.status}`}>
-                                                {PROC_LABELS[rec.status]}
-                                            </span>
+                                            <div className="rl-dup-cell">
+                                                <span className={`rl-proc-status rl-proc-status--${rec.status}`}>
+                                                    {PROC_LABELS[rec.status]}
+                                                </span>
+                                                {rec.isDuplicate && (
+                                                    <>
+                                                        <span className={`rl-dup-scope rl-dup-scope--${rec.duplicateScope || 'WITHIN_RUN'}`}>
+                                                            {rec.duplicateScope === 'CROSS_RUN' ? 'Cross-run dup' : 'Within-run dup'}
+                                                        </span>
+                                                        <span className="rl-dup-meta">
+                                                            First by <span className="rl-dup-meta__strong">{rec.firstSeenBy || 'unknown'}</span>
+                                                            {rec.firstSeenAt ? <> on <span className="rl-dup-meta__strong">{rec.firstSeenAt}</span></> : null}
+                                                        </span>
+                                                    </>
+                                                )}
+                                            </div>
                                         </td>
                                         <td>
                                             <span className="rl-ts">{rec.receivedAt}</span>

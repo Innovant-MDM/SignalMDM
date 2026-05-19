@@ -53,6 +53,8 @@ class IngestionLineageRunSummary(BaseModel):
     """Per-run counts for comparing Raw Landing vs Staging (1:1 per completed pipeline)."""
 
     run_id: uuid.UUID
+    tenant_id: Optional[uuid.UUID] = None
+    tenant_name: Optional[str] = None
     source_system_id: uuid.UUID
     source_name: str
     entity_type: Optional[str] = None
@@ -65,6 +67,29 @@ class IngestionLineageRunSummary(BaseModel):
     )
     pipeline_note: str = ""
     created_at: datetime
+
+    model_config = {"from_attributes": False}
+
+
+class IngestionRunFileItem(BaseModel):
+    """One file attached to an ingestion run, enriched with audit + duplicate context."""
+
+    file_id: uuid.UUID
+    run_id: uuid.UUID
+    tenant_id: uuid.UUID
+    original_filename: str
+    file_size_bytes: Optional[int] = None
+    content_type: Optional[str] = None
+    checksum_md5: Optional[str] = None
+    uploaded_at: datetime
+    uploaded_by: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
+    is_duplicate: bool = False
+    first_uploaded_by: Optional[str] = None
+    first_uploaded_at: Optional[datetime] = None
+    first_uploaded_run_id: Optional[uuid.UUID] = None
+    first_uploaded_file_id: Optional[uuid.UUID] = None
 
     model_config = {"from_attributes": False}
 
@@ -118,6 +143,7 @@ class IngestionRunRead(BaseModel):
 
     run_id: uuid.UUID
     tenant_id: uuid.UUID
+    tenant_name: Optional[str] = None
     source_system_id: uuid.UUID
     state: str
     triggered_by: Optional[str]
@@ -131,11 +157,12 @@ class IngestionRunRead(BaseModel):
     entity_type: Optional[str] = None
     run_type: Optional[str] = None
     trigger_type: Optional[str] = None
+    initiated_by: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
     @classmethod
-    def from_orm_run(cls, run) -> "IngestionRunRead":
+    def from_orm_run(cls, run, tenant_name: Optional[str] = None) -> "IngestionRunRead":
         meta = parse_run_metadata(run.triggered_by)
         session_raw = meta.get("upload_session_id")
         session_id = None
@@ -147,6 +174,7 @@ class IngestionRunRead(BaseModel):
         return cls(
             run_id=run.run_id,
             tenant_id=run.tenant_id,
+            tenant_name=tenant_name,
             source_system_id=run.source_system_id,
             state=run.state,
             triggered_by=run.triggered_by,
@@ -160,6 +188,7 @@ class IngestionRunRead(BaseModel):
             entity_type=meta.get("entity_type"),
             run_type=meta.get("run_type"),
             trigger_type=meta.get("trigger_type"),
+            initiated_by=meta.get("initiated_by"),
         )
 
 

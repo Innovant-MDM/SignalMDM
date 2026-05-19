@@ -36,8 +36,10 @@ from signalmdm.schemas.ingestion_schema import (
     IngestionLineageRunSummary,
     IngestionResolveConfigRead,
     IngestionStatusRead,
+    IngestionRunFileItem,
 )
 from signalmdm.models.upload_session import UploadSessionFile
+from signalmdm.models.tenant import Tenant
 from signalmdm.schemas.common import ok
 from signalmdm.services.ingestion_service import ingestion_service
 from signalmdm.services.raw_service import raw_service
@@ -83,8 +85,11 @@ def start_ingestion(
         data=body,
         performed_by=auth.user_id,
     )
+    tenant_names = ingestion_service.tenant_names_for(db, [run.tenant_id])
     return ok(
-        data=IngestionRunRead.from_orm_run(run).model_dump(),
+        data=IngestionRunRead.from_orm_run(
+            run, tenant_name=tenant_names.get(run.tenant_id)
+        ).model_dump(),
         message="Ingestion run started.",
     )
 
@@ -193,8 +198,11 @@ def start_ingestion_from_session(
     )
 
     delay = settings.ingestion_pipeline_stage_delay_seconds
+    tenant_names = ingestion_service.tenant_names_for(db, [run.tenant_id])
     return ok(
-        data=IngestionRunRead.from_orm_run(run).model_dump(),
+        data=IngestionRunRead.from_orm_run(
+            run, tenant_name=tenant_names.get(run.tenant_id)
+        ).model_dump(),
         message=(
             f"Ingestion started from upload session ({len(session_files)} file(s)). "
             f"Pipeline running in background (~{delay}s between major states)."
@@ -635,7 +643,10 @@ def get_status(
     run = ingestion_service.get_run(db, tenant_id=target_tenant, run_id=run_id)
     staging_count = staging_service.count_staging_for_run(
         db, run_id=run_id, tenant_id=target_tenant)
-    payload = IngestionRunRead.from_orm_run(run).model_dump()
+    tenant_names = ingestion_service.tenant_names_for(db, [run.tenant_id])
+    payload = IngestionRunRead.from_orm_run(
+        run, tenant_name=tenant_names.get(run.tenant_id)
+    ).model_dump()
     payload["staging_count"] = staging_count
     return ok(
         data=payload,
@@ -726,7 +737,46 @@ def list_runs(
         target_tenant = x_tenant_id
 
     runs = ingestion_service.list_runs(db, tenant_id=target_tenant, skip=skip, limit=limit)
+    tenant_names = ingestion_service.tenant_names_for(db, [r.tenant_id for r in runs])
     return ok(
-        data=[IngestionRunRead.from_orm_run(r).model_dump() for r in runs],
+        data=[
+            IngestionRunRead.from_orm_run(
+                r, tenant_name=tenant_names.get(r.tenant_id)
+            ).model_dump()
+            for r in runs
+        ],
         message=f"{len(runs)} ingestion run(s) found.",
+    )
+
+
+@router.get(
+    "/{run_id}/files",
+    summary="List files attached to an ingestion run with upload/delete history and duplicate flags",
+)
+def list_run_files(
+    run_id: uuid.UUID,
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+    auth: TokenPayload = Depends(require_auth),
+):
+    """
+    Returns FileUpload rows for the run, enriched with:
+      * uploaded_by / uploaded_at (resolved from audit log when available)
+      * deleted_by / deleted_at (resolved from DELETE entries in audit log)
+      * is_duplicate + first_uploaded_by / first_uploaded_at when the
+        file's checksum_md5 was already seen earlier within this tenant.
+    """
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
+    rows = ingestion_service.run_files_with_audit(
+        db,
+        tenant_id=target_tenant,
+        run_id=run_id,
+    )
+    data = [IngestionRunFileItem.model_validate(r).model_dump(mode="json") for r in rows]
+    return ok(
+        data=data,
+        message=f"{len(data)} file(s) for run {run_id}.",
     )

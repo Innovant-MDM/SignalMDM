@@ -28,6 +28,9 @@ from signalmdm.schemas.ingestion_schema import (
 from signalmdm.models.upload_session import UploadSession
 from signalmdm.models.raw_record import RawRecord
 from signalmdm.models.staging_entity import StagingEntity
+from signalmdm.models.file_upload import FileUpload
+from signalmdm.models.audit import AuditLog
+from signalmdm.models.tenant import Tenant
 from signalmdm.schemas.ingestion_schema import parse_run_metadata
 from signalmdm.enums import IngestionStateEnum, OperationTypeEnum
 import signalmdm.services.audit_service as audit_svc
@@ -457,9 +460,13 @@ class IngestionService:
         from signalmdm.models.source_system import SourceSystem
 
         target_uuid = self._parse_tenant(tenant_id)
-        q = db.query(IngestionRun, SourceSystem.source_name).join(
-            SourceSystem,
-            SourceSystem.source_system_id == IngestionRun.source_system_id,
+        q = (
+            db.query(IngestionRun, SourceSystem.source_name, Tenant.tenant_name)
+            .join(
+                SourceSystem,
+                SourceSystem.source_system_id == IngestionRun.source_system_id,
+            )
+            .outerjoin(Tenant, Tenant.tenant_id == IngestionRun.tenant_id)
         )
         if target_uuid:
             q = q.filter(IngestionRun.tenant_id == target_uuid)
@@ -470,7 +477,7 @@ class IngestionService:
             .all()
         )
         out: list[dict] = []
-        for run, source_name in rows:
+        for run, source_name, tenant_name in rows:
             raw_n = (
                 db.query(RawRecord)
                 .filter(RawRecord.run_id == run.run_id)
@@ -500,6 +507,8 @@ class IngestionService:
             out.append(
                 {
                     "run_id": run.run_id,
+                    "tenant_id": run.tenant_id,
+                    "tenant_name": tenant_name,
                     "source_system_id": run.source_system_id,
                     "source_name": source_name,
                     "entity_type": meta.get("entity_type"),
@@ -531,6 +540,149 @@ class IngestionService:
             query.order_by(IngestionRun.created_at.desc())
             .offset(skip).limit(limit).all()
         )
+
+    # ------------------------------------------------------------------
+    # Tenant name lookup (for platform-admin row chips)
+    # ------------------------------------------------------------------
+
+    def tenant_names_for(
+        self,
+        db: Session,
+        tenant_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, str]:
+        if not tenant_ids:
+            return {}
+        rows = (
+            db.query(Tenant.tenant_id, Tenant.tenant_name)
+            .filter(Tenant.tenant_id.in_(tenant_ids))
+            .all()
+        )
+        return {tid: name for tid, name in rows}
+
+    # ------------------------------------------------------------------
+    # Files inside a run (with audit-derived deletion + duplicate info)
+    # ------------------------------------------------------------------
+
+    def run_files_with_audit(
+        self,
+        db: Session,
+        tenant_id: Union[str, uuid.UUID],
+        run_id: uuid.UUID,
+    ) -> list[dict]:
+        """
+        Return all FileUpload rows attached to a run plus any audit_log entries
+        that reference the same entity (uploads and deletions).
+
+        Also detects within-tenant duplicates: when two files share the same
+        checksum_md5, the earlier upload (by uploaded_at) is the "original" and
+        every later upload is flagged as a duplicate of it.
+        """
+        run = self.get_run(db, tenant_id, run_id)
+        target_uuid = run.tenant_id
+
+        files: list[FileUpload] = (
+            db.query(FileUpload)
+            .filter(FileUpload.run_id == run_id)
+            .order_by(FileUpload.uploaded_at.asc())
+            .all()
+        )
+
+        out: list[dict] = []
+        if not files:
+            return out
+
+        checksums = [f.checksum_md5 for f in files if f.checksum_md5]
+        first_seen_by_checksum: dict[str, FileUpload] = {}
+        if checksums:
+            tenant_files: list[FileUpload] = (
+                db.query(FileUpload)
+                .filter(
+                    FileUpload.tenant_id == target_uuid,
+                    FileUpload.checksum_md5.in_(checksums),
+                )
+                .order_by(FileUpload.uploaded_at.asc())
+                .all()
+            )
+            for tf in tenant_files:
+                key = tf.checksum_md5 or ""
+                if key and key not in first_seen_by_checksum:
+                    first_seen_by_checksum[key] = tf
+
+        file_ids = [f.file_id for f in files]
+        audit_rows: list[AuditLog] = (
+            db.query(AuditLog)
+            .filter(AuditLog.entity_id.in_(file_ids))
+            .order_by(AuditLog.performed_at.asc())
+            .all()
+        )
+        audits_by_file: dict[uuid.UUID, list[AuditLog]] = {}
+        for a in audit_rows:
+            if a.entity_id is None:
+                continue
+            audits_by_file.setdefault(a.entity_id, []).append(a)
+
+        upload_origin_uploaders: dict[uuid.UUID, dict] = {}
+        for origin in first_seen_by_checksum.values():
+            origin_audits = (
+                db.query(AuditLog)
+                .filter(AuditLog.entity_id == origin.file_id)
+                .order_by(AuditLog.performed_at.asc())
+                .all()
+            )
+            uploader = None
+            uploaded_at = origin.uploaded_at
+            for a in origin_audits:
+                op = (a.operation_type or "").upper()
+                if op in ("UPLOAD", "INSERT") and uploader is None:
+                    uploader = a.performed_by
+                    if a.performed_at:
+                        uploaded_at = a.performed_at
+            upload_origin_uploaders[origin.file_id] = {
+                "uploaded_by": uploader,
+                "uploaded_at": uploaded_at,
+            }
+
+        for f in files:
+            f_audits = audits_by_file.get(f.file_id, [])
+            uploaded_by = None
+            deleted_by = None
+            deleted_at = None
+            for a in f_audits:
+                op = (a.operation_type or "").upper()
+                if op in ("UPLOAD", "INSERT") and uploaded_by is None:
+                    uploaded_by = a.performed_by
+                elif op == "DELETE":
+                    deleted_by = a.performed_by
+                    deleted_at = a.performed_at
+
+            origin = first_seen_by_checksum.get(f.checksum_md5 or "")
+            is_duplicate = origin is not None and origin.file_id != f.file_id
+            origin_info = (
+                upload_origin_uploaders.get(origin.file_id, {}) if origin else {}
+            )
+
+            out.append(
+                {
+                    "file_id": f.file_id,
+                    "run_id": f.run_id,
+                    "tenant_id": f.tenant_id,
+                    "original_filename": f.original_filename,
+                    "file_size_bytes": f.file_size_bytes,
+                    "content_type": f.content_type,
+                    "checksum_md5": f.checksum_md5,
+                    "uploaded_at": f.uploaded_at,
+                    "uploaded_by": uploaded_by,
+                    "deleted_at": deleted_at,
+                    "deleted_by": deleted_by,
+                    "is_duplicate": is_duplicate,
+                    "first_uploaded_by": origin_info.get("uploaded_by") if is_duplicate else None,
+                    "first_uploaded_at": origin_info.get("uploaded_at") if is_duplicate else None,
+                    "first_uploaded_run_id": origin.run_id if (origin and is_duplicate) else None,
+                    "first_uploaded_file_id": origin.file_id if (origin and is_duplicate) else None,
+                }
+            )
+
+        return out
 
     # ------------------------------------------------------------------
     # State transition

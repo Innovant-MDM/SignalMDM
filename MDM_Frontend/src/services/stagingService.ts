@@ -15,6 +15,7 @@ export type StagingStateApi = 'READY_FOR_MAPPING' | 'MAPPED' | 'REJECTED';
 export interface StagingRecordListRead {
   staging_id: string;
   tenant_id: string;
+  tenant_name?: string | null;
   run_id: string;
   raw_record_id: string;
   source_system_id: string;
@@ -31,6 +32,13 @@ export interface StagingRecordListRead {
   source_record_id: string;
   dq_score: number;
   validation_status: string;
+  is_duplicate?: boolean;
+  duplicate_scope?: 'WITHIN_RUN' | 'CROSS_RUN' | null;
+  duplicate_of_raw_record_id?: string | null;
+  duplicate_of_run_id?: string | null;
+  duplicate_of_staging_id?: string | null;
+  first_seen_by?: string | null;
+  first_seen_at?: string | null;
 }
 
 export interface StagingListResponse {
@@ -54,6 +62,8 @@ export interface ValidationRuleUi {
 /** UI row for table + drawer (stable shape). */
 export interface StagingUiRecord {
   id: string;
+  tenantId: string;
+  tenantName: string | null;
   rawId: string;
   srcId: string;
   entity: string;
@@ -71,6 +81,13 @@ export interface StagingUiRecord {
   rawPayload: Record<string, unknown>;
   canonicalPayload: Record<string, unknown>;
   validationRules: ValidationRuleUi[];
+  isDuplicate: boolean;
+  duplicateScope: 'WITHIN_RUN' | 'CROSS_RUN' | null;
+  duplicateOfRawId: string | null;
+  duplicateOfRunId: string | null;
+  duplicateOfStagingId: string | null;
+  firstSeenBy: string | null;
+  firstSeenAt: string | null;
 }
 
 function stagingBadgeClass(state: string): StagingBadgeClass {
@@ -100,13 +117,17 @@ function deriveValidationRules(val: ValidationStatusUi): ValidationRuleUi[] {
   return base;
 }
 
+function fmtTs(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  return iso.includes('T') ? iso.replace('T', ' ').slice(0, 19) : iso;
+}
+
 export function toStagingUiRecord(r: StagingRecordListRead): StagingUiRecord {
-  const created = r.created_at.includes('T')
-    ? r.created_at.replace('T', ' ').slice(0, 19)
-    : r.created_at;
   const val = normalizeValStatus(r.validation_status);
   return {
     id: r.staging_id,
+    tenantId: r.tenant_id,
+    tenantName: r.tenant_name ?? null,
     rawId: r.raw_record_id,
     srcId: r.source_record_id,
     entity: r.ingestion_entity_type || r.entity_display,
@@ -116,7 +137,7 @@ export function toStagingUiRecord(r: StagingRecordListRead): StagingUiRecord {
     stgBadgeClass: stagingBadgeClass(r.state),
     valStatus: val,
     dqScore: r.dq_score,
-    createdAt: created,
+    createdAt: fmtTs(r.created_at) ?? '',
     source: r.source_name,
     runId: r.run_id,
     runShort: `${r.run_id.slice(0, 8)}…`,
@@ -124,6 +145,13 @@ export function toStagingUiRecord(r: StagingRecordListRead): StagingUiRecord {
     rawPayload: { ...r.raw_data },
     canonicalPayload: { ...r.entity_data },
     validationRules: deriveValidationRules(val),
+    isDuplicate: r.is_duplicate ?? false,
+    duplicateScope: r.duplicate_scope ?? null,
+    duplicateOfRawId: r.duplicate_of_raw_record_id ?? null,
+    duplicateOfRunId: r.duplicate_of_run_id ?? null,
+    duplicateOfStagingId: r.duplicate_of_staging_id ?? null,
+    firstSeenBy: r.first_seen_by ?? null,
+    firstSeenAt: fmtTs(r.first_seen_at),
   };
 }
 
