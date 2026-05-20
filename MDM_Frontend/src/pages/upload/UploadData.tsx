@@ -521,7 +521,7 @@ export default function UploadData() {
                         >
                           <span className="up-dropzone__icon">☁️</span>
                           <span className="up-dropzone__label">Drag &amp; drop CSV/JSON/XLSX files here</span>
-                          <span className="up-dropzone__sub">or click to browse — multiple files supported</span>
+                          <span className="up-dropzone__sub">or click to browse — multiple files supported (100MB maximum per file)</span>
                           <input
                             ref={fileInputRef}
                             type="file"
