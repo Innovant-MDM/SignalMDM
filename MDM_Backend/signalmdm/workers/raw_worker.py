@@ -99,7 +99,7 @@ def process_raw_upload(self, run_id_str: str, file_id_str: str, tenant_id_str: s
         logger.info("[raw_worker] Parsed %d rows from %s", len(rows), upload.original_filename)
 
         # Bulk insert raw records
-        record_count = raw_service.bulk_insert_raw_records(
+        result = raw_service.bulk_insert_raw_records(
             db,
             tenant_id=tenant_id,
             run_id=run_id,
@@ -107,6 +107,7 @@ def process_raw_upload(self, run_id_str: str, file_id_str: str, tenant_id_str: s
             file_id=file_id,
             rows=rows,
         )
+        record_count = result.inserted_count
 
         # Transition run state → RAW_LOADED
         ingestion_service.transition_state(

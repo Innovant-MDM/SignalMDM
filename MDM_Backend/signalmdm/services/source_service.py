@@ -4,9 +4,15 @@ signalmdm/services/source_service.py
 Business logic for SourceSystem CRUD.
 
 Rules:
-  • `source_code` must be unique per tenant.
+  • `source_code` must be unique per tenant (slug: a-z0-9_-).
   • Every create/update emits an audit log entry.
   • All queries MUST filter by `tenant_id`.
+
+Security:
+  • source_code is slug-validated (allowlist characters only).
+  • source_name is length-limited and injection-scanned.
+  • config_json depth, key count, and value content are validated.
+  • skip/limit are bounds-checked.
 """
 
 from __future__ import annotations
@@ -20,6 +26,11 @@ from sqlalchemy.orm import Session
 from signalmdm.models.source_system import SourceSystem
 from signalmdm.schemas.source_schema import SourceSystemCreate
 from signalmdm.enums import OperationTypeEnum, StatusEnum
+from signalmdm.utils.sanitize import (
+    sanitize_slug,
+    sanitize_string,
+    sanitize_config_json,
+)
 import signalmdm.services.audit_service as audit_svc
 
 
@@ -34,12 +45,56 @@ class SourceService:
         if isinstance(tenant_id, uuid.UUID):
             return tenant_id
         try:
-            return uuid.UUID(tenant_id)
+            return uuid.UUID(str(tenant_id))
         except (ValueError, TypeError):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid tenant_id format: {tenant_id}",
+                detail="Invalid tenant_id format — must be a valid UUID.",
             )
+
+    def _sanitize_create_input(self, data: SourceSystemCreate) -> SourceSystemCreate:
+        """
+        Validate and sanitize all user-supplied fields on a source registration.
+
+        Raises HTTPException(422) on any violation so the response is consistent
+        with Pydantic validation errors.
+        """
+        errors: list[str] = []
+
+        try:
+            clean_code = sanitize_slug(data.source_code, "source_code")
+        except ValueError as e:
+            errors.append(str(e))
+            clean_code = data.source_code  # keep original so we can continue collecting errors
+
+        try:
+            clean_name = sanitize_string(
+                data.source_name, "source_name", max_length=200, required=True
+            )
+        except ValueError as e:
+            errors.append(str(e))
+            clean_name = data.source_name
+
+        try:
+            clean_config = sanitize_config_json(data.config_json)
+        except ValueError as e:
+            errors.append(str(e))
+            clean_config = data.config_json or {}
+
+        if errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Input validation failed.", "errors": errors},
+            )
+
+        # Return a copy with sanitized values
+        return SourceSystemCreate(
+            source_name=clean_name,
+            source_code=clean_code,
+            source_type=data.source_type,
+            connection_type=data.connection_type,
+            config_json=clean_config,
+        )
 
     # ------------------------------------------------------------------
     # Create
@@ -56,42 +111,43 @@ class SourceService:
         Register a new source system.
 
         Raises 409 if `source_code` already exists for this tenant.
+        Raises 422 if input validation fails.
         """
         target_uuid = self._parse_tenant(tenant_id)
         if target_uuid is None:
-            # SuperAdmin must specify which tenant they are creating for?
-            # For now, we'll assume platform-level sources are allowed if needed,
-            # but usually they belong to a real tenant.
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="SuperAdmin must provide a specific tenant_id for registration.",
+                detail="A specific tenant_id is required for source registration.",
             )
+
+        # Sanitize all inputs before any DB interaction
+        clean_data = self._sanitize_create_input(data)
 
         existing = (
             db.query(SourceSystem)
             .filter(
                 SourceSystem.tenant_id == target_uuid,
-                SourceSystem.source_code == data.source_code,
+                SourceSystem.source_code == clean_data.source_code,
             )
             .first()
         )
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Source with code '{data.source_code}' already exists for this tenant.",
+                detail=f"A source with code '{clean_data.source_code}' already exists for this tenant.",
             )
 
         source = SourceSystem(
             source_system_id=uuid.uuid4(),
             tenant_id=target_uuid,
-            source_name=data.source_name,
-            source_code=data.source_code,
-            source_type=data.source_type,
-            connection_type=data.connection_type,
-            config_json=data.config_json,
+            source_name=clean_data.source_name,
+            source_code=clean_data.source_code,
+            source_type=clean_data.source_type,
+            connection_type=clean_data.connection_type,
+            config_json=clean_data.config_json,
         )
         db.add(source)
-        db.flush()  # Get PK before audit
+        db.flush()
 
         audit_svc.log_action(
             db,
@@ -100,9 +156,9 @@ class SourceService:
             entity_id=source.source_system_id,
             operation_type=OperationTypeEnum.INSERT,
             new_value={
-                "source_code": source.source_code,
-                "source_type": source.source_type,
-                "connection_type": source.connection_type,
+                "source_code":      source.source_code,
+                "source_type":      source.source_type,
+                "connection_type":  source.connection_type,
             },
             performed_by=performed_by,
             autocommit=False,
@@ -124,10 +180,12 @@ class SourceService:
         limit: int = 100,
     ) -> list[SourceSystem]:
         """Return all active source systems for the tenant (or all if platform)."""
+        # Bounds-check pagination
+        skip  = max(0, int(skip))
+        limit = max(1, min(int(limit), 500))
+
         target_uuid = self._parse_tenant(tenant_id)
-
         query = db.query(SourceSystem)
-
         if target_uuid:
             query = query.filter(SourceSystem.tenant_id == target_uuid)
 
@@ -144,11 +202,11 @@ class SourceService:
         tenant_id: Union[str, uuid.UUID],
         source_system_id: uuid.UUID,
     ) -> SourceSystem:
-        """Fetch a single source system; raise 404 if not found."""
+        """Fetch a single source system; raise 404 if not found for this tenant."""
         target_uuid = self._parse_tenant(tenant_id)
-
-        query = db.query(SourceSystem).filter(SourceSystem.source_system_id == source_system_id)
-
+        query = db.query(SourceSystem).filter(
+            SourceSystem.source_system_id == source_system_id
+        )
         if target_uuid:
             query = query.filter(SourceSystem.tenant_id == target_uuid)
 
@@ -156,7 +214,7 @@ class SourceService:
         if not source:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Source system {source_system_id} not found.",
+                detail="Source system not found.",
             )
         return source
 
@@ -177,7 +235,7 @@ class SourceService:
 
         old_val = {"is_active": source.is_active, "status": source.status}
         source.is_active = False
-        source.status = StatusEnum.DEACTIVATED.value  # Explicitly use .value string
+        source.status = StatusEnum.DEACTIVATED.value
         db.flush()
 
         audit_svc.log_action(
@@ -196,7 +254,6 @@ class SourceService:
         db.refresh(source)
         return source
 
-
     # ------------------------------------------------------------------
     # Update Status
     # ------------------------------------------------------------------
@@ -209,19 +266,17 @@ class SourceService:
         new_status: StatusEnum,
         performed_by: str = "system",
     ) -> SourceSystem:
-        """Update the status of a source system (ACTIVE, SUSPENDED, ARCHIVED, etc)."""
+        """Update the status of a source system (ACTIVE, SUSPENDED, ARCHIVED, etc.)."""
         source = self.get_source(db, tenant_id, source_system_id)
         target_uuid = self._parse_tenant(tenant_id) or source.tenant_id
 
         old_val = {"status": source.status, "is_active": source.is_active}
-        
-        # If moving to DEACTIVATED, also set is_active=False
-        # If moving to ACTIVE, ensure is_active=True
+
         if new_status == StatusEnum.DEACTIVATED:
             source.is_active = False
         elif new_status == StatusEnum.ACTIVE:
             source.is_active = True
-            
+
         source.status = new_status.value
         db.flush()
 

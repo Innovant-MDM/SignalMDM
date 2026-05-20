@@ -378,7 +378,7 @@ def _paced_sync_pipeline(
             return
 
         rows = _parse_file(file_bytes, filename)
-        record_count = raw_service.bulk_insert_raw_records(
+        result = raw_service.bulk_insert_raw_records(
             db,
             tenant_id=tenant_id,
             run_id=run_id,
@@ -386,6 +386,7 @@ def _paced_sync_pipeline(
             file_id=file_id,
             rows=rows,
         )
+        record_count = result.inserted_count
         
         try:
             log_action(
@@ -532,7 +533,7 @@ def _ingest_session_files_pipeline(
                 logger.warning("[ingestion] no rows parsed from %s", sf.original_filename)
                 continue
 
-            count = raw_service.bulk_insert_raw_records(
+            result = raw_service.bulk_insert_raw_records(
                 db,
                 tenant_id=tenant_uuid,
                 run_id=run_id,
@@ -540,6 +541,7 @@ def _ingest_session_files_pipeline(
                 file_id=file_upload.file_id,
                 rows=rows,
             )
+            count = result.inserted_count
             total_records += count
             files_processed += 1
 
