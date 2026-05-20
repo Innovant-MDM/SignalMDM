@@ -30,6 +30,10 @@ class OperationTypeEnum(str, Enum):
     UPDATE = "UPDATE"
     DELETE = "DELETE"
     MERGE  = "MERGE"
+    UPLOAD = "UPLOAD"
+    CANCEL = "CANCEL"
+    PROCESS_RAW = "PROCESS_RAW"
+    PROCESS_ERROR = "PROCESS_ERROR"
 
 
 # ---------------------------------------------------------------------------
