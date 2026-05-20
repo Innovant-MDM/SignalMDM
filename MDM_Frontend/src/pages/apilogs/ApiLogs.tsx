@@ -153,6 +153,12 @@ function LogDrawer({ record, onClose, initialTab = 'overview' }: LogDrawerProps)
                             <DrawerField label="Tenant" value={record.tenantName} />
                             <DrawerField label="Source IP" value={record.sourceIp ?? '—'} />
                             <DrawerField label="Trace ID" value={record.traceId ?? '—'} mono wide />
+                            {record.approvedBy && (
+                                <DrawerField label="Approved By" value={record.approvedBy} />
+                            )}
+                            {record.approvalReason && (
+                                <DrawerField label="Approval Reason" value={record.approvalReason} wide />
+                            )}
                         </div>
                     )}
                     {(tab === 'before' || tab === 'after') && (

@@ -56,6 +56,8 @@ def log_action(
     performed_by: str = "system",
     source_ip: Optional[str] = None,
     trace_id: Optional[str] = None,
+    approved_by: Optional[str] = None,
+    approval_reason: Optional[str] = None,
     autocommit: bool = True,
 ) -> AuditLog:
     """
@@ -101,6 +103,18 @@ def log_action(
         max_length=_MAX_TRACE_ID,
         required=False,
     ) or None
+    
+    clean_approved_by = sanitize_string(
+        approved_by, "approved_by",
+        max_length=150,
+        required=False,
+    ) or None
+    
+    clean_approval_reason = sanitize_string(
+        approval_reason, "approval_reason",
+        max_length=500,
+        required=False,
+    ) or None
 
     log = AuditLog(
         audit_id=uuid.uuid4(),
@@ -113,6 +127,8 @@ def log_action(
         performed_by=clean_performed_by,
         source_ip=clean_source_ip,
         trace_id=clean_trace_id,
+        approved_by=clean_approved_by,
+        approval_reason=clean_approval_reason,
     )
     db.add(log)
     if autocommit:
@@ -216,6 +232,8 @@ def list_api_logs_page(
                 "performed_at":   log.performed_at,
                 "source_ip":      log.source_ip,
                 "trace_id":       log.trace_id,
+                "approved_by":    log.approved_by,
+                "approval_reason": log.approval_reason,
             }
         )
     return out, total

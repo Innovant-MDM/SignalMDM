@@ -85,6 +85,16 @@ class AuditLog(Base):
         nullable=True,
         comment="Distributed tracing correlation ID (e.g. W3C traceparent).",
     )
+    approved_by: Mapped[Optional[str]] = mapped_column(
+        String(150),
+        nullable=True,
+        comment="Who approved the override, if manual intervention occurred.",
+    )
+    approval_reason: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Why the override was approved.",
+    )
 
     # ------------------------------------------------------------------
     # Relationships

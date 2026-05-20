@@ -28,5 +28,7 @@ class ApiLogListItem(BaseModel):
     performed_at: datetime
     source_ip: Optional[str] = None
     trace_id: Optional[str] = None
+    approved_by: Optional[str] = None
+    approval_reason: Optional[str] = None
 
     model_config = {"from_attributes": False}

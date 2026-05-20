@@ -24,6 +24,8 @@ export interface ApiLogListRead {
   performed_at: string;
   source_ip: string | null;
   trace_id: string | null;
+  approved_by?: string | null;
+  approval_reason?: string | null;
 }
 
 export interface ApiLogsListResponse {
@@ -45,6 +47,8 @@ export interface ApiLogUiRecord {
   performedAt: string;
   sourceIp: string | null;
   traceId: string | null;
+  approvedBy: string | null;
+  approvalReason: string | null;
   oldValue: Record<string, unknown> | null;
   newValue: Record<string, unknown> | null;
 }
@@ -64,6 +68,8 @@ export function toApiLogUiRecord(r: ApiLogListRead): ApiLogUiRecord {
     performedAt: performed,
     sourceIp: r.source_ip,
     traceId: r.trace_id,
+    approvedBy: r.approved_by ?? null,
+    approvalReason: r.approval_reason ?? null,
     oldValue: r.old_value,
     newValue: r.new_value,
   };
