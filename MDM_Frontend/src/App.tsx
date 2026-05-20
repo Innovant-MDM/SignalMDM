@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, ProtectedRoute } from './context/AuthContext';
 import { TenantConfigProvider } from './context/TenantConfigContext';
 import { PermissionsProvider } from './context/PermissionsContext';
+import { SnackbarProvider } from './context/SnackbarContext';
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
 import SourceSystems from './pages/source/SourceSystems';
@@ -36,47 +37,49 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
-          {/* ── Public ── */}
-          <Route path="/login" element={<Login />} />
+        <SnackbarProvider>
+          <Routes>
+            {/* ── Public ── */}
+            <Route path="/login" element={<Login />} />
 
-          {/* ── Protected shell ── */}
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute allowedRoles={['super_admin', 'admin', 'data_architect', 'data_manager', 'executive']}>
-                <TenantConfigProvider>
-                  <PermissionsProvider>
-                    <MainLayout />
-                  </PermissionsProvider>
-                </TenantConfigProvider>
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<Placeholder title="Dashboard — Coming Soon" />} />
-            <Route path="sources" element={<SourceSystems />} />
-            <Route path="ingestion" element={<IngestionRuns />} />
-            <Route path="upload" element={<UploadData />} />
-            <Route path="raw-landing" element={<RawLanding />} />
-            <Route path="staging" element={<StagingRecords />} />
-            <Route path="tenants" element={<Tenants />} />
-            <Route path="api-logs" element={<ApiLogs />} />
-            <Route path="system-health" element={<SystemHealth />} />
-            <Route path="dev-setup" element={<DevSetup />} />
+            {/* ── Protected shell ── */}
             <Route
-              path="platform-rbac"
+              path="/"
               element={
-                <ProtectedRoute allowedRoles={['super_admin']}>
-                  <PlatformRBAC />
+                <ProtectedRoute allowedRoles={['super_admin', 'admin', 'data_architect', 'data_manager', 'executive']}>
+                  <TenantConfigProvider>
+                    <PermissionsProvider>
+                      <MainLayout />
+                    </PermissionsProvider>
+                  </TenantConfigProvider>
                 </ProtectedRoute>
               }
-            />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Route>
+            >
+              <Route index element={<Placeholder title="Dashboard — Coming Soon" />} />
+              <Route path="sources" element={<SourceSystems />} />
+              <Route path="ingestion" element={<IngestionRuns />} />
+              <Route path="upload" element={<UploadData />} />
+              <Route path="raw-landing" element={<RawLanding />} />
+              <Route path="staging" element={<StagingRecords />} />
+              <Route path="tenants" element={<Tenants />} />
+              <Route path="api-logs" element={<ApiLogs />} />
+              <Route path="system-health" element={<SystemHealth />} />
+              <Route path="dev-setup" element={<DevSetup />} />
+              <Route
+                path="platform-rbac"
+                element={
+                  <ProtectedRoute allowedRoles={['super_admin']}>
+                    <PlatformRBAC />
+                  </ProtectedRoute>
+                }
+              />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
 
-          {/* ── Catch-all ── */}
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
+            {/* ── Catch-all ── */}
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        </SnackbarProvider>
       </AuthProvider>
     </BrowserRouter>
   );

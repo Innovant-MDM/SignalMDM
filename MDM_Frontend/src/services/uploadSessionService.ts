@@ -28,6 +28,9 @@ export interface UploadSessionFile {
   record_count: number | null;
   uploaded_by: string | null;
   uploaded_at: string;
+  is_duplicate?: boolean;
+  first_uploaded_by?: string | null;
+  first_uploaded_at?: string | null;
 }
 
 export interface UploadSession {

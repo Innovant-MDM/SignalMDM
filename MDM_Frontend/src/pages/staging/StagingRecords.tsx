@@ -8,6 +8,7 @@ import {
     type MouseEvent,
 } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { useSnackbar } from '../../context/SnackbarContext';
 
 import IngestionRunLineagePicker from '../../components/ingestion/IngestionRunLineagePicker';
 import TenantBreadcrumb from '../../components/TenantBreadcrumb';
@@ -388,6 +389,7 @@ function RecordDrawer({ record, onClose }: RecordDrawerProps) {
 }
 
 export default function StagingRecords() {
+    const snackbar = useSnackbar();
     const [searchParams, setSearchParams] = useSearchParams();
     const runIdFromUrl = searchParams.get('runId');
     const { activeTenantId } = useTenantConfig();
@@ -500,14 +502,16 @@ export default function StagingRecords() {
                     selectRun('ALL');
                 }
                 await loadData();
+                snackbar.showSuccess('Ingestion run deleted successfully.');
             } catch (err) {
                 const msg =
                     err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Delete failed';
                 setError(msg);
+                snackbar.showError(`Failed to delete run: ${msg}`);
                 throw err;
             }
         },
-        [activeTenantId, filterRun, selectRun, loadData],
+        [activeTenantId, filterRun, selectRun, loadData, snackbar],
     );
 
     const filtered = useMemo(() => {

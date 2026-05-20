@@ -9,6 +9,7 @@ import {
   type UploadSessionFile,
 } from '../../services/uploadSessionService';
 import { ApiError } from '../../services/api';
+import { useSnackbar } from '../../context/SnackbarContext';
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -35,11 +36,79 @@ function fmtFriendlyDate(s: string): string {
 
 // ── pending file row (before upload) ──────────────────────────────────────
 
+interface SchemaValidationError {
+  type: 'error' | 'warning';
+  message: string;
+}
+
 interface PendingEntry {
   id: string;          // local key
   file: File;
   label: string;       // user-assigned label
   previewCount: number | null; // CSV rows counted client-side
+  validationStatus: 'PASSED' | 'WARNING' | 'FAILED' | 'SKIPPED';
+  validationErrors: SchemaValidationError[];
+}
+
+const EXPECTED_ATTRIBUTES: Record<string, { columns: string[]; mandatory: string[] }> = {
+  CUSTOMER: {
+    columns: ['customer_name', 'email', 'phone', 'billing_address', 'shipping_address', 'date_of_birth', 'loyalty_tier', 'status', 'created_at'],
+    mandatory: ['customer_name', 'email']
+  },
+  SUPPLIER: {
+    columns: ['supplier_name', 'tax_id', 'contact_email', 'contact_phone', 'payment_terms', 'rating', 'website_url', 'supplier_status'],
+    mandatory: ['supplier_name', 'tax_id']
+  },
+  PRODUCT: {
+    columns: ['product_name', 'sku', 'category', 'price', 'stock_quantity', 'manufacturer', 'weight', 'dimensions', 'is_active'],
+    mandatory: ['product_name', 'sku']
+  },
+  ACCOUNT: {
+    columns: ['account_name', 'account_number', 'currency', 'account_type', 'balance', 'branch_code', 'swift_code', 'opened_date'],
+    mandatory: ['account_name', 'account_number']
+  },
+  ASSET: {
+    columns: ['asset_name', 'asset_id', 'location', 'purchase_date', 'value', 'depreciation_rate', 'status', 'assigned_to'],
+    mandatory: ['asset_name', 'asset_id']
+  },
+  LOCATION: {
+    columns: ['location_name', 'address', 'region', 'country', 'postal_code', 'latitude', 'longitude', 'capacity'],
+    mandatory: ['location_name', 'address']
+  },
+  EMPLOYEE: {
+    columns: ['name', 'employee_id', 'department', 'role', 'email', 'phone', 'hire_date', 'manager_id', 'salary_band'],
+    mandatory: ['name', 'employee_id']
+  },
+  OTHER: {
+    columns: ['name', 'description', 'type', 'status', 'metadata_json', 'created_by'],
+    mandatory: ['name']
+  }
+};
+
+function getExpectedSchemaForDomain(domain: string) {
+  const norm = domain.trim().toUpperCase();
+  if (EXPECTED_ATTRIBUTES[norm]) return EXPECTED_ATTRIBUTES[norm];
+  for (const key of Object.keys(EXPECTED_ATTRIBUTES)) {
+    if (norm.includes(key) || key.includes(norm)) {
+      return EXPECTED_ATTRIBUTES[key];
+    }
+  }
+  return EXPECTED_ATTRIBUTES.OTHER;
+}
+
+function parseCsvHeaders(text: string): string[] {
+  const firstLine = text.split(/\r?\n/)[0] || '';
+  return firstLine.split(',').map(h => h.trim().replace(/^["']|["']$/g, ''));
+}
+
+function parseJsonHeaders(text: string): string[] {
+  try {
+    const parsed = JSON.parse(text);
+    const obj = Array.isArray(parsed) ? parsed[0] : parsed;
+    return obj ? Object.keys(obj) : [];
+  } catch {
+    return [];
+  }
 }
 
 function countCsvRows(text: string): number {
@@ -53,6 +122,7 @@ type View = 'list' | 'newSession' | 'detail';
 
 // ===========================================================================
 export default function UploadData() {
+  const snackbar = useSnackbar();
   // ── tenant from global context (same as IngestionRuns) ──
   const { activeTenantId, activeTenantName } = useTenantConfig();
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
@@ -161,9 +231,11 @@ export default function UploadData() {
       setView('detail');
       setActiveSession(s);
       setPendingEntries([]);
+      snackbar.showSuccess(`Upload session "${s.session_name}" created successfully.`);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Create failed';
       setFormErrors(prev => ({ ...prev, general: msg }));
+      snackbar.showError(`Failed to create session: ${msg}`);
     } finally {
       setCreating(false);
     }
@@ -176,6 +248,9 @@ export default function UploadData() {
     const newEntries: PendingEntry[] = [];
     const tooLarge: string[] = [];
     const unsupported: string[] = [];
+
+    const domain = activeSession?.domain || 'OTHER';
+    const schema = getExpectedSchemaForDomain(domain);
 
     for (const f of arr) {
       if (f.size > 100 * 1024 * 1024) {
@@ -193,20 +268,95 @@ export default function UploadData() {
       if (f.name.toLowerCase().endsWith('.csv')) {
         try { previewCount = countCsvRows(await f.text()); } catch { /* ok */ }
       }
-      newEntries.push({ id: crypto.randomUUID(), file: f, label: f.name.replace(/\.[^.]+$/, ''), previewCount });
+
+      let validationStatus: 'PASSED' | 'WARNING' | 'FAILED' | 'SKIPPED' = 'PASSED';
+      const validationErrors: SchemaValidationError[] = [];
+      let headers: string[] = [];
+
+      if (ext === 'csv') {
+        try {
+          const text = await f.text();
+          headers = parseCsvHeaders(text);
+        } catch {
+          validationStatus = 'FAILED';
+          validationErrors.push({ type: 'error', message: 'Failed to read CSV file text.' });
+        }
+      } else if (ext === 'json') {
+        try {
+          const text = await f.text();
+          headers = parseJsonHeaders(text);
+        } catch {
+          validationStatus = 'FAILED';
+          validationErrors.push({ type: 'error', message: 'Failed to parse JSON file.' });
+        }
+      } else {
+        validationStatus = 'SKIPPED';
+      }
+
+      if (validationStatus !== 'FAILED' && validationStatus !== 'SKIPPED') {
+        const lowerHeaders = headers.map(h => h.toLowerCase());
+        const missingMandatory = schema.mandatory.filter(col => !lowerHeaders.includes(col.toLowerCase()));
+        const missingOptional = schema.columns.filter(col => !schema.mandatory.includes(col) && !lowerHeaders.includes(col.toLowerCase()));
+        const extraColumns = headers.filter(h => !schema.columns.map(c => c.toLowerCase()).includes(h.toLowerCase()));
+        const hasOverlap = headers.some(h => schema.columns.map(c => c.toLowerCase()).includes(h.toLowerCase()));
+
+        if (missingMandatory.length > 0) {
+          validationStatus = 'FAILED';
+          validationErrors.push({
+            type: 'error',
+            message: `Missing mandatory column(s) for ${domain}: ${missingMandatory.join(', ')}`
+          });
+        } else if (!hasOverlap && headers.length > 0) {
+          validationStatus = 'FAILED';
+          validationErrors.push({
+            type: 'error',
+            message: `Schema mismatch: None of the expected columns for ${domain} found.`
+          });
+        } else {
+          if (missingOptional.length > 0) {
+            validationStatus = 'WARNING';
+            validationErrors.push({
+              type: 'warning',
+              message: `Missing optional column(s): ${missingOptional.join(', ')}`
+            });
+          }
+          if (extraColumns.length > 0) {
+            if (validationStatus === 'PASSED') validationStatus = 'WARNING';
+            validationErrors.push({
+              type: 'warning',
+              message: `Detected unrecognized column(s): ${extraColumns.join(', ')}`
+            });
+          }
+        }
+      }
+
+      newEntries.push({
+        id: crypto.randomUUID(),
+        file: f,
+        label: f.name.replace(/\.[^.]+$/, ''),
+        previewCount,
+        validationStatus,
+        validationErrors,
+      });
     }
 
     if (tooLarge.length > 0 || unsupported.length > 0) {
       const errMsgs = [];
-      if (tooLarge.length > 0) errMsgs.push(`Skipped ${tooLarge.length} file(s) exceeding 100MB: ${tooLarge.join(', ')}`);
-      if (unsupported.length > 0) errMsgs.push(`Skipped ${unsupported.length} unsupported file(s): ${unsupported.join(', ')}. Only CSV, JSON, and XLSX are allowed.`);
+      if (tooLarge.length > 0) {
+        errMsgs.push(`Skipped ${tooLarge.length} file(s) exceeding 100MB: ${tooLarge.join(', ')}`);
+        snackbar.showError(`Files exceeding 100MB limit: ${tooLarge.join(', ')}`);
+      }
+      if (unsupported.length > 0) {
+        errMsgs.push(`Skipped ${unsupported.length} unsupported file(s): ${unsupported.join(', ')}. Only CSV, JSON, and XLSX are allowed.`);
+        snackbar.showWarning(`Unsupported formats: ${unsupported.join(', ')}`);
+      }
       setUploadError(errMsgs.join(' | '));
     } else {
       setUploadError(null);
     }
     
     setPendingEntries(prev => [...prev, ...newEntries]);
-  }, []);
+  }, [activeSession, snackbar]);
 
   const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -228,7 +378,11 @@ export default function UploadData() {
   const handleUpload = async () => {
     if (!activeSession || pendingEntries.length === 0) return;
     const emptyLabel = pendingEntries.find(p => !p.label.trim());
-    if (emptyLabel) { setUploadError('All file labels are required.'); return; }
+    if (emptyLabel) {
+      snackbar.showWarning('All file labels are required.');
+      setUploadError('All file labels are required.');
+      return;
+    }
 
     setUploading(true);
     setUploadError(null);
@@ -252,9 +406,17 @@ export default function UploadData() {
       const full = await uploadSessionService.getSession(activeSession.session_id, activeTenantId ?? undefined);
       setActiveSession(full);
       await loadSessions(activeTenantId);
+
+      const hasDuplicate = full.files?.some(f => f.is_duplicate);
+      if (hasDuplicate) {
+        snackbar.showWarning('File upload completed. Note: One or more uploaded files are duplicate checksums.');
+      } else {
+        snackbar.showSuccess('Files uploaded successfully.');
+      }
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Upload failed';
       setUploadError(msg);
+      snackbar.showError(`Upload failed: ${msg}`);
     } finally {
       clearInterval(timer);
       setUploading(false);
@@ -270,8 +432,11 @@ export default function UploadData() {
       const full = await uploadSessionService.getSession(activeSession.session_id, activeTenantId ?? undefined);
       setActiveSession(full);
       await loadSessions(activeTenantId);
+      snackbar.showSuccess(`File "${file.file_label}" has been removed.`);
     } catch (e) {
-      setUploadError(e instanceof Error ? e.message : 'Delete failed');
+      const msg = e instanceof Error ? e.message : 'Delete failed';
+      setUploadError(msg);
+      snackbar.showError(`Failed to delete file: ${msg}`);
     }
   };
 
@@ -470,7 +635,17 @@ export default function UploadData() {
                       <tbody>
                         {activeSession.files!.map(f => (
                           <tr key={f.file_id}>
-                            <td><strong>{f.file_label}</strong></td>
+                            <td>
+                              <strong>{f.file_label}</strong>
+                              {f.is_duplicate && (
+                                <div className="up-dup-warning" style={{ marginTop: 4 }}>
+                                  <div className="up-dup-title">⚠ Duplicate File</div>
+                                  <div className="up-dup-meta">
+                                    First uploaded by <strong>{f.first_uploaded_by || 'Unknown'}</strong> on {f.first_uploaded_at ? fmtFriendlyDate(f.first_uploaded_at) : ''}
+                                  </div>
+                                </div>
+                              )}
+                            </td>
                             <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono,monospace)', fontSize: 11 }}>
                               {f.original_filename}
                             </td>
@@ -553,11 +728,30 @@ export default function UploadData() {
                                   <input className="up-input" value={entry.file.name} readOnly style={{ opacity: .7 }} />
                                 </div>
                                 <button className="up-file-entry__remove" onClick={() => removeEntry(entry.id)} type="button">✕</button>
-                                <div className="up-file-entry__meta">
-                                  <span>📄 {fmtBytes(entry.file.size)}</span>
-                                  {entry.previewCount != null && (
-                                    <span className="up-file-entry__badge">~{entry.previewCount.toLocaleString()} rows</span>
-                                  )}
+                                <div className="up-file-entry__meta" style={{ flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                                  <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                    <span>📄 {fmtBytes(entry.file.size)}</span>
+                                    {entry.previewCount != null && (
+                                      <span className="up-file-entry__badge">~{entry.previewCount.toLocaleString()} rows</span>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <div className={`up-validation-badge up-validation-badge--${entry.validationStatus.toLowerCase()}`}>
+                                      {entry.validationStatus === 'PASSED' && '✓ Schema Verified'}
+                                      {entry.validationStatus === 'WARNING' && '⚠ Schema Warning'}
+                                      {entry.validationStatus === 'FAILED' && '✕ Schema Failed'}
+                                      {entry.validationStatus === 'SKIPPED' && 'ℹ Verification Skipped (.xlsx)'}
+                                    </div>
+                                    {entry.validationErrors.length > 0 && (
+                                      <ul className="up-validation-errors">
+                                        {entry.validationErrors.map((err, index) => (
+                                          <li key={index} className={`up-validation-error--${err.type}`}>
+                                            {err.message}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             ))}
@@ -583,6 +777,12 @@ export default function UploadData() {
                     {uploadError && (
                       <div className="up-alert up-alert--error"><span>✕</span><span>{uploadError}</span></div>
                     )}
+                    {pendingEntries.some(e => e.validationStatus === 'FAILED') && (
+                      <div className="up-alert up-alert--error" style={{ marginTop: 12 }}>
+                        <span>✕</span>
+                        <span>Please remove files with failed schema validations before uploading.</span>
+                      </div>
+                    )}
                     {uploadSuccess && (
                       <div className="up-alert up-alert--success"><span>✓</span><span>Files uploaded successfully.</span></div>
                     )}
@@ -601,7 +801,12 @@ export default function UploadData() {
               {activeSession.status === 'OPEN' && pendingEntries.length > 0 && (
                 <div className="up-card__foot">
                   <button className="up-btn up-btn--ghost" onClick={() => setPendingEntries([])} disabled={uploading} type="button">Clear</button>
-                  <button className="up-btn up-btn--primary" onClick={() => void handleUpload()} disabled={uploading || pendingEntries.length === 0} type="button">
+                  <button
+                    className="up-btn up-btn--primary"
+                    onClick={() => void handleUpload()}
+                    disabled={uploading || pendingEntries.length === 0 || pendingEntries.some(e => e.validationStatus === 'FAILED')}
+                    type="button"
+                  >
                     {uploading ? '⏳ Uploading…' : `⬆ Upload ${pendingEntries.length} File${pendingEntries.length !== 1 ? 's' : ''}`}
                   </button>
                 </div>

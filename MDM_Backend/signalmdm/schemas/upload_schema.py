@@ -75,6 +75,9 @@ class UploadSessionFileRead(BaseModel):
     record_count: Optional[int]
     uploaded_by: Optional[str]
     uploaded_at: datetime
+    is_duplicate: bool = False
+    first_uploaded_by: Optional[str] = None
+    first_uploaded_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

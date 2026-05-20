@@ -110,7 +110,59 @@ def _file_read(f: UploadSessionFile) -> dict:
         record_count=f.record_count,
         uploaded_by=f.uploaded_by,
         uploaded_at=f.uploaded_at,
-    ).model_dump()
+    ).model_dump(mode="json")
+
+
+def _enrich_session_files_with_duplicates(
+    db: Session,
+    tenant_id: str | uuid.UUID,
+    files: list[UploadSessionFile],
+) -> list[dict]:
+    if not files:
+        return []
+
+    target_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, str) else tenant_id
+    checksums = [f.checksum_md5 for f in files if f.checksum_md5]
+    
+    first_seen_by_checksum = {}
+    if checksums:
+        candidates = (
+            db.query(UploadSessionFile)
+            .filter(
+                UploadSessionFile.tenant_id == target_uuid,
+                UploadSessionFile.checksum_md5.in_(checksums),
+            )
+            .order_by(UploadSessionFile.uploaded_at.asc())
+            .all()
+        )
+        for c in candidates:
+            key = c.checksum_md5
+            if key and key not in first_seen_by_checksum:
+                first_seen_by_checksum[key] = c
+
+    enriched = []
+    for f in files:
+        origin = first_seen_by_checksum.get(f.checksum_md5)
+        is_dup = origin is not None and origin.file_id != f.file_id
+
+        read_obj = UploadSessionFileRead(
+            file_id=f.file_id,
+            session_id=f.session_id,
+            tenant_id=f.tenant_id,
+            file_label=f.file_label,
+            original_filename=f.original_filename,
+            file_size_bytes=f.file_size_bytes,
+            content_type=f.content_type,
+            record_count=f.record_count,
+            uploaded_by=f.uploaded_by,
+            uploaded_at=f.uploaded_at,
+            is_duplicate=is_dup,
+            first_uploaded_by=origin.uploaded_by if (is_dup and origin) else None,
+            first_uploaded_at=origin.uploaded_at if (is_dup and origin) else None,
+        )
+        enriched.append(read_obj.model_dump(mode="json"))
+
+    return enriched
 
 
 # ---------------------------------------------------------------------------
@@ -256,19 +308,20 @@ def get_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    result = UploadSessionWithFiles(
-        session_id=session.session_id,
-        tenant_id=session.tenant_id,
-        session_name=session.session_name,
-        domain=session.domain,
-        status=session.status,
-        created_by=session.created_by,
-        created_at=session.created_at,
-        updated_at=session.updated_at,
-        file_count=len(session.files),
-        files=[UploadSessionFileRead.model_validate(f) for f in session.files],
-    )
-    return ok(data=result.model_dump(), message="Session loaded.")
+    enriched_files = _enrich_session_files_with_duplicates(db, session.tenant_id, session.files)
+    result_dict = {
+        "session_id": session.session_id,
+        "tenant_id": session.tenant_id,
+        "session_name": session.session_name,
+        "domain": session.domain,
+        "status": session.status,
+        "created_by": session.created_by,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "file_count": len(session.files),
+        "files": enriched_files,
+    }
+    return ok(data=jsonable_encoder(result_dict), message="Session loaded.")
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +382,7 @@ async def upload_files_to_session(
     )
     os.makedirs(upload_dir, exist_ok=True)
 
-    saved: list[dict] = []
+    uploaded_objs: list[UploadSessionFile] = []
 
     for upload_file, label in zip(files, labels):
         file_bytes = await upload_file.read()
@@ -380,7 +433,7 @@ async def upload_files_to_session(
         )
         db.add(sf)
         db.flush()  # get file_id without committing
-        saved.append(_file_read(sf))
+        uploaded_objs.append(sf)
 
         try:
             log_action(
@@ -399,9 +452,11 @@ async def upload_files_to_session(
 
     db.commit()
 
+    enriched_uploaded = _enrich_session_files_with_duplicates(db, session.tenant_id, uploaded_objs)
+
     return ok(
-        data={"session_id": str(session_id), "uploaded": saved},
-        message=f"{len(saved)} file(s) uploaded to session '{session.session_name}'.",
+        data={"session_id": str(session_id), "uploaded": enriched_uploaded},
+        message=f"{len(enriched_uploaded)} file(s) uploaded to session '{session.session_name}'.",
     )
 
 
