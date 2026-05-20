@@ -8,7 +8,7 @@
 
 import { api, ApiError } from './api';
 
-export type OperationType = 'INSERT' | 'UPDATE' | 'DELETE' | 'MERGE';
+export type OperationType = 'INSERT' | 'UPDATE' | 'DELETE' | 'MERGE' | 'UPLOAD' | 'CANCEL' | 'PROCESS_RAW' | 'PROCESS_ERROR';
 
 /** One row from GET /api/v1/api-logs/ */
 export interface ApiLogListRead {

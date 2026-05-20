@@ -28,8 +28,8 @@ interface JsonObject {
     [key: string]: JsonValue;
 }
 
-const OPERATIONS: OperationType[] = ['INSERT', 'UPDATE', 'DELETE', 'MERGE'];
-const ENTITY_PRESETS = ['tenant', 'source_systems', 'ingestion_runs'];
+const OPERATIONS: OperationType[] = ['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'UPLOAD', 'CANCEL', 'PROCESS_RAW', 'PROCESS_ERROR'];
+const ENTITY_PRESETS = ['tenant', 'source_systems', 'ingestion_runs', 'IngestionUpload', 'IngestionRun', 'IngestionPipeline', 'UploadSessionFile'];
 const PAGE_SIZE = 25;
 
 function opBadgeClass(op: string): string {
@@ -277,9 +277,9 @@ export default function ApiLogs() {
         setPage((p) => Math.min(p, totalPages));
     }, [totalPages]);
 
-    const insertCount = logs.filter((l) => l.operation === 'INSERT').length;
-    const updateCount = logs.filter((l) => l.operation === 'UPDATE').length;
-    const deleteCount = logs.filter((l) => l.operation === 'DELETE' || l.operation === 'MERGE').length;
+    const insertCount = logs.filter((l) => l.operation === 'INSERT' || l.operation === 'UPLOAD').length;
+    const updateCount = logs.filter((l) => l.operation === 'UPDATE' || l.operation === 'PROCESS_RAW' || l.operation === 'PROCESS_ERROR').length;
+    const deleteCount = logs.filter((l) => l.operation === 'DELETE' || l.operation === 'MERGE' || l.operation === 'CANCEL').length;
 
     const openDrawer = (rec: ApiLogUiRecord, tab: DrawerTab = 'overview') => {
         setViewRecord(rec);
