@@ -197,6 +197,14 @@ def decode_token(raw_jwt: str) -> dict[str, Any]:
 
     Raises jose.JWTError on failure (expired, invalid signature, etc.).
     """
+    try:
+        header = jwt.get_unverified_header(raw_jwt)
+    except Exception as exc:
+        raise JWTError("Invalid JWT header") from exc
+
+    if header.get("alg") != _JWT_ALGORITHM:
+        raise JWTError(f"Unsupported algorithm: {header.get('alg')}")
+
     return jwt.decode(raw_jwt, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
 
 

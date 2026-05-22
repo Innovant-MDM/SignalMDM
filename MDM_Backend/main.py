@@ -55,103 +55,191 @@ logger = logging.getLogger(__name__)
 # Security Headers Middleware
 # ---------------------------------------------------------------------------
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+class SecurityHeadersMiddleware:
     """
     Adds strict HTTP security headers to every response.
 
     These headers are the first line of defence at the HTTP layer and
     are independent of the JWT / AES auth flow.
     """
+    def __init__(self, app):
+        self.app = app
 
-    async def dispatch(self, request: Request, call_next):
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         start = time.monotonic()
-        response = await call_next(request)
-        elapsed = round((time.monotonic() - start) * 1000, 2)
 
-        # Prevent browsers from MIME-sniffing
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        # Stop clickjacking
-        response.headers["X-Frame-Options"] = "DENY"
-        # Force HTTPS for 1 year (enable in production behind TLS terminator)
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        # Minimal referrer leakage
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        # Restrict browser features
-        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-        # Basic XSS protection (legacy browsers)
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        # Remove server fingerprint
-        response.headers["Server"] = "SignalMDM"
-        # Timing info (useful for monitoring)
-        response.headers["X-Response-Time"] = f"{elapsed}ms"
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
 
-        return response
+                # Security headers to set/override (single-value headers only)
+                security_headers = {
+                    b"x-content-type-options": b"nosniff",
+                    b"x-frame-options": b"DENY",
+                    b"strict-transport-security": b"max-age=31536000; includeSubDomains",
+                    b"referrer-policy": b"strict-origin-when-cross-origin",
+                    b"permissions-policy": b"geolocation=(), microphone=(), camera=()",
+                    b"x-xss-protection": b"1; mode=block",
+                    b"content-security-policy": b"default-src 'self'",
+                }
+
+                # Headers to remove
+                remove_headers = {b"server"}
+
+                # Build new header list: keep existing headers that we don't
+                # need to override, preserving duplicates (e.g. Set-Cookie)
+                override_keys = set(security_headers.keys()) | remove_headers
+                new_headers = [
+                    (k, v) for k, v in headers
+                    if k.lower() not in override_keys
+                ]
+
+                # Append security headers
+                for k, v in security_headers.items():
+                    new_headers.append((k, v))
+
+                # Append response time
+                elapsed = round((time.monotonic() - start) * 1000, 2)
+                new_headers.append((b"x-response-time", f"{elapsed}ms".encode("utf-8")))
+
+                message["headers"] = new_headers
+
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception as exc:
+            logger.exception("SecurityHeadersMiddleware unhandled error")
+            response = JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "message": "Internal server error",
+                    "data": None,
+                    "errors": [str(exc)],
+                },
+            )
+            await response(scope, receive, send_wrapper)
     
-class ResponseEnvelopeMiddleware(BaseHTTPMiddleware):
+class ResponseEnvelopeMiddleware:
     """
     Standardises all successful API responses into a uniform envelope:
     { "success": true, "message": "...", "data": T, "errors": [] }
 
     This ensures the frontend client (api.ts) always receives a predictable structure.
     """
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
+    def __init__(self, app):
+        self.app = app
 
-        # Skip non-JSON or already wrapped responses (like from exception handlers)
-        # and skip standard health/root endpoints if desired
-        path = request.url.path
-        if not path.startswith("/api/v1") or response.status_code >= 400:
-            return response
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        # Only wrap application/json responses
-        content_type = response.headers.get("Content-Type", "")
-        if "application/json" not in content_type:
-            return response
+        path = scope.get("path", "")
+        if not path.startswith("/api/v1"):
+            await self.app(scope, receive, send)
+            return
 
-        # Read the body and wrap it
-        body = b""
-        async for chunk in response.body_iterator:
-            body += chunk
+        response_start = None
+        body_chunks = []
+
+        async def send_wrapper(message):
+            nonlocal response_start
+
+            if message["type"] == "http.response.start":
+                response_start = message
+                return
+
+            if message["type"] == "http.response.body":
+                body_chunks.append(message.get("body", b""))
+                if message.get("more_body", False):
+                    return
+
+                full_body = b"".join(body_chunks)
+                status_code = response_start.get("status", 200)
+                headers = list(response_start.get("headers", []))
+
+                is_json = False
+                for k, v in headers:
+                    if k.lower() == b"content-type" and b"application/json" in v.lower():
+                        is_json = True
+                        break
+
+                if status_code >= 400 or not is_json:
+                    await send(response_start)
+                    await send({
+                        "type": "http.response.body",
+                        "body": full_body,
+                        "more_body": False
+                    })
+                    return
+
+                try:
+                    if not full_body:
+                        await send(response_start)
+                        await send(message)
+                        return
+
+                    data = json.loads(full_body.decode("utf-8"))
+                    
+                    # If it's already wrapped (has 'success' and 'data' keys), don't wrap again
+                    if isinstance(data, dict) and "success" in data and "data" in data:
+                        await send(response_start)
+                        await send(message)
+                        return
+
+                    wrapped = {
+                        "success": True,
+                        "message": "Request fulfilled successfully.",
+                        "data": data,
+                        "errors": []
+                    }
+                    
+                    wrapped_body = json.dumps(wrapped).encode("utf-8")
+                    
+                    # Prepare new headers: remove Content-Length as it will be recalculated
+                    new_headers = []
+                    for k, v in headers:
+                        if k.lower() != b"content-length":
+                            new_headers.append((k, v))
+                    new_headers.append((b"content-length", str(len(wrapped_body)).encode("utf-8")))
+                    
+                    response_start["headers"] = new_headers
+                    
+                    await send(response_start)
+                    await send({
+                        "type": "http.response.body",
+                        "body": wrapped_body,
+                        "more_body": False
+                    })
+                except Exception as e:
+                    logger.error("[middleware] Failed to wrap response: %s", e)
+                    await send(response_start)
+                    await send({
+                        "type": "http.response.body",
+                        "body": full_body,
+                        "more_body": False
+                    })
 
         try:
-            if not body:
-                return Response(content=body, status_code=response.status_code, headers=dict(response.headers))
-
-            data = json.loads(body)
-            # If it's already wrapped (has 'success' and 'data' keys), don't wrap again
-            if isinstance(data, dict) and "success" in data and "data" in data:
-                return Response(
-                    content=body,
-                    status_code=response.status_code,
-                    headers=dict(response.headers)
-                )
-
-            wrapped = {
-                "success": True,
-                "message": "Request fulfilled successfully.",
-                "data": data,
-                "errors": []
-            }
-            
-            # Prepare new headers: remove Content-Length as it will be recalculated
-            new_headers = dict(response.headers)
-            new_headers.pop("content-length", None)
-            new_headers.pop("Content-Length", None)
-            
-            return Response(
-                content=json.dumps(wrapped),
-                status_code=response.status_code,
-                headers=new_headers,
-                media_type="application/json"
+            await self.app(scope, receive, send_wrapper)
+        except Exception as exc:
+            logger.exception("ResponseEnvelopeMiddleware error: %s", exc)
+            response = JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "message": "Internal server error",
+                    "data": None,
+                    "errors": [str(exc)]
+                }
             )
-        except Exception as e:
-            logger.error("[middleware] Failed to wrap response: %s", e)
-            # Return original body if wrapping fails
-            return Response(
-                content=body,
-                status_code=response.status_code,
-                headers=dict(response.headers)
-            )
+            await response(scope, receive, send)
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +265,8 @@ async def lifespan(app: FastAPI):
 # Application
 # ---------------------------------------------------------------------------
 
+is_prod = settings.app_env == "production"
+
 app = FastAPI(
     title=settings.app_title,
     version=settings.app_version,
@@ -188,19 +278,24 @@ app = FastAPI(
         "- `X-Device-ID: <stable device fingerprint>`"
     ),
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=None if is_prod else "/docs",
+    redoc_url=None if is_prod else "/redoc",
+    openapi_url=None if is_prod else "/openapi.json",
 )
 
 # ---------------------------------------------------------------------------
 # Middleware — order matters: outermost first
 # ---------------------------------------------------------------------------
 
-# 1. Security headers (applied to ALL responses)
-app.add_middleware(SecurityHeadersMiddleware)
+# 1. Rate limiting (applied first/innermost after routing)
+from signalmdm.middleware.rate_limit import RateLimitingMiddleware
+app.add_middleware(RateLimitingMiddleware)
 
 # 2. Response envelope (wraps successful JSON responses)
 app.add_middleware(ResponseEnvelopeMiddleware)
+
+# 3. Security headers (applied to ALL responses, wrapping the envelope and rate limiter)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # 3. CORS (before security headers so preflight OPTIONS also gets headers)
 app.add_middleware(

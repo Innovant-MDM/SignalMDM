@@ -322,7 +322,7 @@ def login(email: str, password: str, db: Session) -> dict:
 
     if not _verify_password(password, admin.password_hash):
         logger.warning("[auth_service] Password mismatch for user: %s", email)
-        _increment_attempt("login", str(admin.admin_id), MAX_LOGIN_ATTEMPTS)
+        _increment_attempt("login", email, MAX_LOGIN_ATTEMPTS)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials.",
@@ -371,6 +371,7 @@ def verify_otp(
 
     admin: Optional[PlatformAdmin] = db.get(PlatformAdmin, admin_id)
     if not admin:
+        _increment_attempt("otp", admin_id_str, MAX_OTP_ATTEMPTS)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin not found.")
 
     if getattr(admin, 'is_blocked', False):
@@ -440,6 +441,7 @@ def verify_2fa(
 
     admin: Optional[PlatformAdmin] = db.get(PlatformAdmin, admin_id)
     if not admin or not admin.two_fa_secret:
+        _increment_attempt("2fa", admin_id_str, MAX_2FA_ATTEMPTS)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="2FA not configured.")
 
     totp = pyotp.TOTP(admin.two_fa_secret)

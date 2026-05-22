@@ -387,18 +387,23 @@ async def upload_files_to_session(
     for upload_file, label in zip(files, labels):
         file_bytes = await upload_file.read()
 
+        # Sanitization
+        raw_filename = upload_file.filename or "upload"
+        fname = os.path.basename(raw_filename)
+        if not fname or fname in (".", ".."):
+            fname = "upload"
+
         # Size check
         size_mb = len(file_bytes) / (1024 * 1024)
         if size_mb > _MAX_FILE_MB:
             raise HTTPException(
                 status_code=413,
-                detail=f"File '{upload_file.filename}' exceeds {_MAX_FILE_MB} MB limit.",
+                detail=f"File '{fname}' exceeds {_MAX_FILE_MB} MB limit.",
             )
         if len(file_bytes) == 0:
-            raise HTTPException(status_code=400, detail=f"File '{upload_file.filename}' is empty.")
+            raise HTTPException(status_code=400, detail=f"File '{fname}' is empty.")
 
         # Detect file type
-        fname = upload_file.filename or "upload"
         ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
         if ext not in ("csv", "json", "xlsx"):
             raise HTTPException(

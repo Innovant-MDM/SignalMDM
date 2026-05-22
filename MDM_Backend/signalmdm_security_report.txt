@@ -1,0 +1,400 @@
+========================================================================
+  SIGNALMDM — SECURITY PENETRATION TEST REPORT
+  Generated: 2026-05-22 16:16:24
+========================================================================
+
+  SECURITY SCORE:  43/100   Grade: F — CRITICAL RISK — Do not launch
+
+  Tests Passed:    104
+  Warnings:        8
+  Failures by severity:
+    CRITICAL: 0
+    HIGH:     3
+    MEDIUM:   5
+    LOW:      2
+
+========================================================================
+  EXECUTIVE SUMMARY
+========================================================================
+
+  ⚠️  HIGH SEVERITY ISSUES:
+    • [JWT] Malformed token accepted: Null bytes
+      Detail: HTTP 400
+      Fix: Reject all malformed tokens immediately.
+
+
+  ⚠️  WARNINGS (improve before launch):
+    • [Security Headers] Backend: Server leaks info
+      Detail: Value: uvicorn
+      Fix: Remove or obscure the Server header in production.
+
+    • [Security Headers] Frontend: X-Frame-Options weak
+      Detail: Got: SAMEORIGIN  Expected contains: DENY
+      Fix: Set X-Frame-Options: DENY
+
+    • [CSP] Frontend: 'unsafe-inline' in CSP
+      Detail: Allows inline script execution — XSS risk.
+      Fix: Remove 'unsafe-inline' from your CSP, especially in script-src.
+
+    • [CSP] Frontend: 'unsafe-eval' in CSP
+      Detail: Allows eval() — code injection risk.
+      Fix: Remove 'unsafe-eval' from your CSP, especially in script-src.
+
+    • [Brute Force] Different errors for unknown/wrong password
+      Detail: Unknown: 'Invalid credentials.'  Wrong: 'Account locked due to multiple failed attempts. Try again in 2 hours.'
+      Fix: Return identical error messages for user-not-found vs wrong-password.
+
+    • [OTP] OTP brute force not locked in 5 attempts
+      Detail: Made 5 OTP attempts on fake admin_id without lockout
+      Fix: Ensure OTP lockout also triggers for invalid admin_ids.
+
+    • [Cookies] adminInfo cookie is NOT httpOnly
+      Detail: adminInfo cookie is JS-readable by design — ensure it contains no sensitive data
+      Fix: Do not store sensitive data in non-httpOnly cookies. adminInfo has username/email only — acceptable.
+
+    • [File Upload] Path traversal in filename (static check)
+      Detail: ../../etc/passwd sent as filename — verify backend strips path components
+      Fix: Use os.path.basename() or pathlib on all uploaded filenames. Never trust client-provided paths.
+
+========================================================================
+  FULL TEST RESULTS
+========================================================================
+
+  [Reachability]
+  ✓ [INFO    ] Backend (FastAPI) online
+             HTTP 200
+  ✓ [INFO    ] Frontend (Express) online
+             HTTP 200
+
+  [Security Headers]
+  ✓ [INFO    ] Backend: X-Content-Type-Options present
+             Value: nosniff
+  ✓ [INFO    ] Backend: X-Frame-Options present
+             Value: DENY
+  ✓ [INFO    ] Backend: Strict-Transport-Security present
+             Value: max-age=31536000; includeSubDomains
+  ✓ [INFO    ] Backend: Referrer-Policy present
+             Value: strict-origin-when-cross-origin
+  ✓ [INFO    ] Backend: Permissions-Policy present
+             Value: geolocation=(), microphone=(), camera=()
+  ✓ [INFO    ] Backend: X-XSS-Protection present
+             Value: 1; mode=block
+  ✓ [INFO    ] Backend: Content-Security-Policy present
+             Value: default-src 'self'
+  ! [MEDIUM  ] Backend: Server leaks info
+             Value: uvicorn
+    → Fix: Remove or obscure the Server header in production.
+  ✓ [INFO    ] Frontend: X-Content-Type-Options present
+             Value: nosniff
+  ! [MEDIUM  ] Frontend: X-Frame-Options weak
+             Got: SAMEORIGIN  Expected contains: DENY
+    → Fix: Set X-Frame-Options: DENY
+  ✓ [INFO    ] Frontend: Strict-Transport-Security present
+             Value: max-age=31536000; includeSubDomains
+  ✓ [INFO    ] Frontend: Referrer-Policy present
+             Value: no-referrer
+  ✗ [LOW     ] Frontend: Permissions-Policy missing
+             Header absent
+    → Fix: Add Permissions-Policy to all responses.
+  ✓ [INFO    ] Frontend: X-XSS-Protection present
+             Value: 0
+  ✓ [INFO    ] Frontend: Content-Security-Policy present
+             Value: default-src 'self';script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.
+
+  [CSP]
+  ✓ [INFO    ] Backend: CSP present
+             default-src 'self'
+  ✓ [INFO    ] Frontend: CSP present
+             default-src 'self';script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com;style-src 'self' 'unsafe-inli...
+  ! [HIGH    ] Frontend: 'unsafe-inline' in CSP
+             Allows inline script execution — XSS risk.
+    → Fix: Remove 'unsafe-inline' from your CSP, especially in script-src.
+  ! [MEDIUM  ] Frontend: 'unsafe-eval' in CSP
+             Allows eval() — code injection risk.
+    → Fix: Remove 'unsafe-eval' from your CSP, especially in script-src.
+
+  [CORS]
+  ✓ [INFO    ] Correctly blocks origin: http://evil.com
+             No ACAO header for untrusted origin
+  ✓ [INFO    ] Correctly blocks origin: https://attacker.example.com
+             No ACAO header for untrusted origin
+  ✓ [INFO    ] Correctly blocks origin: null
+             No ACAO header for untrusted origin
+  ✓ [INFO    ] Correctly blocks origin: http://localhost.evil.com
+             No ACAO header for untrusted origin
+  ✓ [INFO    ] Preflight correctly restricted
+             ACAO: absent
+
+  [Brute Force]
+  ✓ [INFO    ] Account locked after 6 attempts
+             Got 403 on attempt #6 — lockout working
+  ! [MEDIUM  ] Different errors for unknown/wrong password
+             Unknown: 'Invalid credentials.'  Wrong: 'Account locked due to multiple failed attempts. Try again in 2 hours.'
+    → Fix: Return identical error messages for user-not-found vs wrong-password.
+
+  [SQL Injection]
+  ✓ [INFO    ] Payload rejected: ' OR '1'='1
+             HTTP 422 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: '; DROP TABLE platform_admins;
+             HTTP 422 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: ' UNION SELECT null, null, nul
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: admin'--
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: ' OR 1=1 --
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: " OR ""="
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: 1; SELECT * FROM information_s
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: ' AND SLEEP(3) --
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: '; WAITFOR DELAY '0:0:3' --
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: ' OR '1'='1
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: '; DROP TABLE platform_admins;
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: ' UNION SELECT null, null, nul
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: admin'--
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: ' OR 1=1 --
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: " OR ""="
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: 1; SELECT * FROM information_s
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: ' AND SLEEP(3) --
+             HTTP 429 — no SQL error detected
+  ✓ [INFO    ] Payload rejected: '; WAITFOR DELAY '0:0:3' --
+             HTTP 429 — no SQL error detected
+
+  [JWT]
+  ✓ [INFO    ] No token → rejected
+             HTTP 401
+  ✓ [INFO    ] Malformed token rejected: Random string
+             HTTP 401
+  ✓ [INFO    ] Malformed token rejected: Empty Bearer
+             HTTP 401
+  ✗ [HIGH    ] Malformed token accepted: Null bytes
+             HTTP 400
+    → Fix: Reject all malformed tokens immediately.
+  ✓ [INFO    ] Malformed token rejected: Very long
+             HTTP 401
+  ✓ [INFO    ] Algorithm 'none' correctly rejected
+             HTTP 401
+  ✓ [INFO    ] Expired token rejected
+             HTTP 401
+
+  [OTP]
+  ! [MEDIUM  ] OTP brute force not locked in 5 attempts
+             Made 5 OTP attempts on fake admin_id without lockout
+    → Fix: Ensure OTP lockout also triggers for invalid admin_ids.
+  i [MEDIUM  ] OTP single-use (manual test required)
+             Verify that OTP is deleted from Redis after first successful use
+  i [LOW     ] OTP 10-minute expiry (manual verify)
+             OTP_TTL_SECONDS=600 is set — verify Redis TTL is respected
+
+  [Cookies]
+  i [INFO    ] No cookies set by /docs (expected)
+             Cookie flags will be tested on authenticated endpoints
+  ✓ [INFO    ] httpOnly=True on accessToken (code verified)
+             auth_service.py: response.set_cookie(httponly=True) confirmed
+  i [INFO    ] Secure flag is env-conditional (expected in HTTP dev)
+             secure=is_prod — cookies sent over HTTP in development.
+  ! [LOW     ] adminInfo cookie is NOT httpOnly
+             adminInfo cookie is JS-readable by design — ensure it contains no sensitive data
+    → Fix: Do not store sensitive data in non-httpOnly cookies. adminInfo has username/email only — acceptable.
+  ✓ [INFO    ] refreshToken path restricted to /api/v1/auth/refresh
+             path='/api/v1/auth/refresh' — refresh token not sent on all requests
+
+  [File Upload]
+  i [LOW     ] Upload response for shell.php: 404
+             HTTP 404
+  i [LOW     ] Upload response for evil.html: 404
+             HTTP 404
+  i [LOW     ] Upload response for test.exe: 404
+             HTTP 404
+  i [LOW     ] Upload response for ../../etc/passwd: 404
+             HTTP 404
+  ! [HIGH    ] Path traversal in filename (static check)
+             ../../etc/passwd sent as filename — verify backend strips path components
+    → Fix: Use os.path.basename() or pathlib on all uploaded filenames. Never trust client-provided paths.
+
+  [Path Traversal]
+  ✓ [INFO    ] Traversal blocked: ../../etc/passwd
+             HTTP 404
+  ✓ [INFO    ] Traversal blocked: ../../etc/passwd
+             HTTP 404
+  ✓ [INFO    ] SPA serves index.html (not traversal)
+             URL: http://localhost:3030/../../etc/passwd — SPA shell returned, no file content leaked
+  ✓ [INFO    ] Traversal blocked: ..%2F..%2Fetc%2Fpasswd
+             HTTP 404
+  ✓ [INFO    ] Traversal blocked: ..%2F..%2Fetc%2Fpasswd
+             HTTP 404
+  ✓ [INFO    ] SPA serves index.html (not traversal)
+             URL: http://localhost:3030/..%2F..%2Fetc%2Fpasswd — SPA shell returned, no file content leaked
+  ✓ [INFO    ] Traversal blocked: %2e%2e%2f%2e%2e%2fetc%2fpasswd
+             HTTP 404
+  ✓ [INFO    ] Traversal blocked: %2e%2e%2f%2e%2e%2fetc%2fpasswd
+             HTTP 404
+  ✓ [INFO    ] SPA serves index.html (not traversal)
+             URL: http://localhost:3030/%2e%2e%2f%2e%2e%2fetc%2fpasswd — SPA shell returned, no file content leaked
+  ✓ [INFO    ] Traversal blocked: ....//....//etc/passwd
+             HTTP 404
+  ✓ [INFO    ] Traversal blocked: ....//....//etc/passwd
+             HTTP 404
+  ✓ [INFO    ] SPA serves index.html (not traversal)
+             URL: http://localhost:3030/....//....//etc/passwd — SPA shell returned, no file content leaked
+  ✓ [INFO    ] Traversal blocked: ..\..\windows\system32\drivers
+             HTTP 404
+  ✓ [INFO    ] Traversal blocked: ..\..\windows\system32\drivers
+             HTTP 404
+  ✓ [INFO    ] SPA serves index.html (not traversal)
+             URL: http://localhost:3030/..\..\windows\system32\drivers\etc\hosts — SPA shell returned, no file content leaked
+
+  [Info Disclosure]
+  i [INFO    ] /docs accessible (expected in dev)
+             API docs accessible for development at /docs
+  i [INFO    ] /redoc accessible (expected in dev)
+             API docs accessible for development at /redoc
+  i [INFO    ] /openapi.json accessible (expected in dev)
+             API docs accessible for development at /openapi.json
+  ✓ [INFO    ] /.env correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /api/v1/.env correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /config correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /settings correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /debug correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /__debug__ correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /admin correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /phpmyadmin correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /.git/config correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /api/v1/health correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] /.well-known/ correctly blocked/hidden
+             HTTP 404
+  ✓ [INFO    ] No stack trace in error responses
+             404/error responses don't leak internals
+
+  [Rate Limiting]
+  ✓ [INFO    ] Rate limit triggered at request #20
+             429 Too Many Requests received
+  ✓ [INFO    ] Login rate limit at #1
+             Login endpoint rate-limited
+
+  [XSS]
+  ✓ [INFO    ] XSS payload not reflected: <script>alert(1)</script>
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: javascript:alert(document.cook
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: <img src=x onerror=alert(1)>
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: '"><svg onload=alert(1)>
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: <iframe src='javascript:alert(
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: {{7*7}}
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: ${7*7}
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: <script>alert(1)</script>
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: javascript:alert(document.cook
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: <img src=x onerror=alert(1)>
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: '"><svg onload=alert(1)>
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: <iframe src='javascript:alert(
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: {{7*7}}
+             Response doesn't echo payload
+  ✓ [INFO    ] XSS payload not reflected: ${7*7}
+             Response doesn't echo payload
+  i [LOW     ] CSP as XSS mitigation
+             CSP test results above indicate XSS protection level
+
+  [Auth Bypass]
+  ✓ [INFO    ] /api/v1/auth/me protected
+             HTTP 401 without token
+  ✓ [INFO    ] /api/v1/tenants protected
+             HTTP 401 without token
+  ✓ [INFO    ] /api/v1/sources protected
+             HTTP 401 without token
+  i [LOW     ] /api/v1/admin unexpected: HTTP 404
+  i [LOW     ] /api/v1/platform-rbac unexpected: HTTP 404
+  ✓ [INFO    ] /api/v1/ingestion protected
+             HTTP 401 without token
+  i [LOW     ] /api/v1/raw unexpected: HTTP 404
+  i [LOW     ] /api/v1/staging unexpected: HTTP 404
+  ✓ [INFO    ] /api/v1/api-logs protected
+             HTTP 401 without token
+  i [LOW     ] /api/v1/tenant-config unexpected: HTTP 404
+  i [LOW     ] /api/v1/upload unexpected: HTTP 404
+
+  [IDOR]
+  ✓ [INFO    ] IDOR blocked (no auth): http://localhost:8000/api/v1/tenants/{id}
+             HTTP 401 for ID a94037cf-e989-4823-b066-e83b708602c8
+  ✓ [INFO    ] IDOR blocked (no auth): http://localhost:8000/api/v1/sources/{id}
+             HTTP 401 for ID a94037cf-e989-4823-b066-e83b708602c8
+  ✓ [INFO    ] 404 for ID a94037cf-e989-4823-b066-e83b708602c8 on http://localhost:8000/api/v1/raw/{id}
+             Resource not found — no data leaked
+
+  [Method Tampering]
+  i [LOW     ] DELETE returned 429
+             URL: http://localhost:8000/api/v1/auth/login
+  i [LOW     ] PUT returned 429
+             URL: http://localhost:8000/api/v1/auth/login
+  i [LOW     ] PATCH returned 429
+             URL: http://localhost:8000/api/v1/auth/login
+  i [LOW     ] TRACE returned 429
+             URL: http://localhost:8000/api/v1/auth/login
+  i [LOW     ] CONNECT returned 429
+             URL: http://localhost:8000/api/v1/auth/login
+  ✓ [INFO    ] DELETE correctly rejected
+             HTTP 405 on http://localhost:8000/api/v1/auth/me
+  ✓ [INFO    ] PUT correctly rejected
+             HTTP 405 on http://localhost:8000/api/v1/auth/me
+  ✓ [INFO    ] PATCH correctly rejected
+             HTTP 405 on http://localhost:8000/api/v1/auth/me
+  ✓ [INFO    ] TRACE correctly rejected
+             HTTP 405 on http://localhost:8000/api/v1/auth/me
+  ✓ [INFO    ] CONNECT correctly rejected
+             HTTP 405 on http://localhost:8000/api/v1/auth/me
+
+  [Open Redirect]
+  i [INFO    ] Frontend SPA redirect test
+             Express SPA serves index.html for all routes — not vulnerable to open redirect via routing
+
+========================================================================
+  IMMEDIATE ACTION CHECKLIST
+========================================================================
+
+  Before Production Launch:
+  [ ] Rotate JWT_SECRET to a 64+ char random string
+  [ ] Rotate TOKEN_ENCRYPTION_KEY (new secrets.token_hex(32))
+  [ ] Rotate Gmail App Password (SMTP_PASSWORD)
+  [ ] Rotate PostgreSQL password
+  [ ] Set APP_ENV=production
+  [ ] Disable /docs and /redoc endpoints
+  [ ] Enable HTTPS (set secure=True on all cookies)
+  [ ] Implement nginx rate limiting on /api/v1/auth/
+  [ ] Ensure UPLOAD_DIR is outside the webroot
+  [ ] Validate uploaded file MIME types server-side
+  [ ] Remove 'unsafe-inline' and 'unsafe-eval' from CSP if possible
+  [ ] Set up log monitoring for brute force attempts
+  [ ] Configure HSTS in production (behind TLS terminator)
+    
+========================================================================
+  END OF REPORT — SignalMDM Security Audit
+========================================================================
