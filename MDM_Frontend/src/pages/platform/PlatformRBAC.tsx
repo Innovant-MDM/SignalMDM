@@ -238,6 +238,23 @@ function UsersTab({ roles }: { roles: PlatformRole[] }) {
     catch (err) { alert(err instanceof Error ? err.message : 'Failed.'); }
   };
 
+  const handleToggle2FA = async (u: PlatformUser) => {
+    const action = u.two_fa_enabled ? 'Disable' : 'Enable';
+    const message = u.two_fa_enabled
+      ? `Are you sure you want to disable Multi-Factor Authentication (2FA) for ${u.email}? This will delete their current authenticator secret and configuration.`
+      : `Require Multi-Factor Authentication (2FA) for ${u.email}? They will be prompted to setup an authenticator app upon their next login.`;
+
+    if (!confirm(message)) return;
+    try {
+      await platformRbacService.updateUser(u.admin_id, {
+        two_fa_enabled: !u.two_fa_enabled,
+      });
+      load();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to update 2FA configuration.');
+    }
+  };
+
   const filtered = users.filter(u => {
     const q = search.toLowerCase();
     return !q || u.email.toLowerCase().includes(q) || u.username.toLowerCase().includes(q) || (u.full_name ?? '').toLowerCase().includes(q);
@@ -283,6 +300,39 @@ function UsersTab({ roles }: { roles: PlatformRole[] }) {
                 {u.two_fa_enabled && <span className="badge badge--green">2FA</span>}
                 {u.must_change_password && <span className="badge badge--amber">Pwd Reset</span>}
               </div>
+
+              {/* 2FA Ribbon */}
+              <div className="rbac-user-card__2fa-section">
+                <div className="rbac-2fa-status-info">
+                  <span className="rbac-2fa-icon">
+                    {u.two_fa_enabled ? (u.two_fa_setup_complete ? '🔒' : '⏳') : '🔓'}
+                  </span>
+                  <div className="rbac-2fa-status-text">
+                    <span className={`rbac-2fa-status-label ${
+                      u.two_fa_enabled
+                        ? (u.two_fa_setup_complete ? 'rbac-2fa-status-label--enabled' : 'rbac-2fa-status-label--pending')
+                        : 'rbac-2fa-status-label--disabled'
+                    }`}>
+                      {u.two_fa_enabled
+                        ? (u.two_fa_setup_complete ? '2FA Enabled' : '2FA Pending Setup')
+                        : '2FA Disabled'}
+                    </span>
+                    <span className="rbac-2fa-status-sub">
+                      {u.two_fa_enabled
+                        ? (u.two_fa_setup_complete ? 'Protected with authenticator' : 'Requires setup on next login')
+                        : 'Standard login only'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={`btn btn--xs ${u.two_fa_enabled ? 'btn--danger' : 'btn--primary'}`}
+                  onClick={() => handleToggle2FA(u)}
+                >
+                  {u.two_fa_enabled ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+
               <div className="rbac-user-card__footer">
                 <button className="btn btn--ghost btn--sm" onClick={() => setEditUser(u)}>Edit</button>
                 <button className="btn btn--ghost btn--sm" onClick={() => setResetUser(u)}>Reset Pwd</button>

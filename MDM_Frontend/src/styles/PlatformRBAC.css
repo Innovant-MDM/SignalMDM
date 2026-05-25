@@ -114,3 +114,74 @@
 
 /* ─── Blocked user overlay ────────────────────────────────── */
 .rbac-blocked-tag { font-size: 11px; font-weight: 700; background: var(--red-100); color: var(--red-600); padding: 2px 8px; border-radius: 99px; }
+
+/* ─── 2FA Activation & Control Ribbon ────────────────────── */
+.rbac-user-card__2fa-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--r-md);
+  padding: 10px 14px;
+  margin-top: 4px;
+  transition: all .15s ease-in-out;
+}
+.rbac-user-card__2fa-section:hover {
+  background: var(--bg-surface);
+  border-color: var(--border-muted);
+}
+.rbac-2fa-status-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.rbac-2fa-icon {
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.rbac-2fa-status-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.rbac-2fa-status-label {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rbac-2fa-status-label--enabled {
+  color: var(--green-600);
+}
+.rbac-2fa-status-label--pending {
+  color: var(--amber-500);
+}
+.rbac-2fa-status-label--disabled {
+  color: var(--gray-500);
+}
+.rbac-2fa-status-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 1px;
+  line-height: 1.2;
+}
+.rbac-user-card__2fa-section .btn--xs {
+  font-size: 10.5px;
+  padding: 4px 10px;
+  border-radius: var(--r-xs);
+  height: 26px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
