@@ -45,6 +45,7 @@ from signalmdm.models.staging_entity import StagingEntity
 from signalmdm.models.platform_role  import PlatformRole, PlatformPermission, PlatformRolePermission
 from signalmdm.models.platform_admin import PlatformAdmin
 from signalmdm.models.upload_session import UploadSession, UploadSessionFile
+from signalmdm.models.domain         import Domain
 
 __all__ = [
     # Core
@@ -79,4 +80,6 @@ __all__ = [
     # Upload sessions
     "UploadSession",
     "UploadSessionFile",
+    # Domains
+    "Domain",
 ]

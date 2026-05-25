@@ -19,6 +19,7 @@ const NAV: NavGroup[] = [
     group: 'Foundation',
     items: [
       { label: 'Source Systems',  path: '/sources',     icon: '⬡', screen: 'sources' },
+      { label: 'Domains',         path: '/domains',     icon: '◈', screen: 'domains' },
       { label: 'Upload Data',     path: '/upload',      icon: '⬆', screen: 'upload' },
       { label: 'Ingestion Runs',  path: '/ingestion',   icon: '↻', screen: 'ingestion' },
       { label: 'Raw Landing',     path: '/raw-landing', icon: '⬇', screen: 'raw_landing' },

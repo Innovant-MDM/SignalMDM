@@ -301,16 +301,16 @@ export default function UploadData() {
         const hasOverlap = headers.some(h => schema.columns.map(c => c.toLowerCase()).includes(h.toLowerCase()));
 
         if (missingMandatory.length > 0) {
-          validationStatus = 'FAILED';
+          validationStatus = 'WARNING';
           validationErrors.push({
-            type: 'error',
-            message: `Missing mandatory column(s) for ${domain}: ${missingMandatory.join(', ')}`
+            type: 'warning',
+            message: `Missing expected column(s) for ${domain}: ${missingMandatory.join(', ')} — file will be uploaded as raw data.`
           });
         } else if (!hasOverlap && headers.length > 0) {
-          validationStatus = 'FAILED';
+          validationStatus = 'WARNING';
           validationErrors.push({
-            type: 'error',
-            message: `Schema mismatch: None of the expected columns for ${domain} found.`
+            type: 'warning',
+            message: `Schema mismatch: None of the expected columns for ${domain} found — file will be uploaded as raw data.`
           });
         } else {
           if (missingOptional.length > 0) {

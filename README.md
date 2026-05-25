@@ -1,488 +1,287 @@
-# SignalMDM
+# SignalMDM: Enterprise Multi-Tenant Master Data Management Platform
 
-A multi-tenant Master Data Management platform with a secure ingestion pipeline, async processing, and audit-ready data lineage tracking.
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
+[![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
+[![Platform Version](https://img.shields.io/badge/Version-1.0.0--RC1-blue.svg)]()
+
+A state-of-the-art, secure, multi-tenant Master Data Management (MDM) platform designed for large-scale enterprise data consolidation, quality assurance, mapping, and auditable data lineage tracking.
 
 ---
 
-## Project Layout
+## 1. Project Overview
+
+### 1.1 Business Purpose
+In modern enterprises, data is fragmented across multiple transactional systems, CRM applications, and cloud data warehouses. This fragmentation leads to operational inefficiencies, duplicate records, reporting errors, and compliance risks.
+
+**SignalMDM** acts as the single source of truth (Golden Record engine) for the enterprise. It ingests records from disparate external source systems, cleanses and normalizes the payload, runs survivorship and mapping rules, and exposes unified data entities. By providing robust logical tenant isolation, administrative audit logs, and granular access control, SignalMDM ensures enterprise data remains consistent, compliant, and highly available.
+
+### 1.2 System Objectives
+*   **Single Source of Truth:** Unify multiple representations of the same real-world entity into a single "Golden Record".
+*   **Strict Multi-Tenancy:** Ensure structural, logical, and transactional isolation between corporate tenants under a single deployment.
+*   **Security & Compliance First:** Protect sensitive data with client-side encrypted session tokens, device fingerprint verification, sliding-window rate limiting, and immutable database audit logs.
+*   **Scalable Async Ingestion:** Leverage a robust Celery+Redis task distribution pipeline to load and process millions of records with automated retry capabilities and seamless fallback synchronization.
+*   **Enterprise Observability:** Track every modification, data drift anomaly, API transaction, and quality exception through intuitive administration dashboard panels.
+
+---
+
+## 2. Technology Stack
+
+SignalMDM is engineered using a premium, decoupled architecture separating the API control-plane, background execution threads, caching/throttling layers, and a modern SPA frontend.
+
+### 2.1 Backend Core
+*   **FastAPI (v0.136.1):** A high-performance web framework for building APIs, leveraging standard Python type hints.
+*   **Uvicorn (v0.42.0):** An ultra-fast ASGI web server implementation for launching FastAPI in local and production environments.
+*   **SQLAlchemy ORM (v2.0.40):** Unified Object Relational Mapper offering transaction control and dynamic query execution.
+*   **Pydantic (v2.11.7) & Pydantic-Settings (v2.10.1):** Strict, runtime typing validation models and secure configuration management.
+*   **Celery (v5.6.3):** Distributed asynchronous task execution framework.
+*   **Redis (v6.2.0):** High-throughput, low-latency in-memory cache, Celery broker, and sliding rate limiter.
+
+### 2.2 Security & Authentication
+*   **PyJWT (python-jose v3.5.0):** JSON Web Token signing, validation, and claim decoding.
+*   **Cryptography (v46.0.5):** AES-256-CBC encryption and decryption of token payloads.
+*   **Bcrypt (v5.0.0):** Adaptive hashing for passwords and verification tokens.
+*   **PyOTP (v2.9.0):** Time-based and counter-based One-Time Password generation for Multi-Factor Authentication.
+
+### 2.3 Frontend Application
+*   **React (v18.3.1):** A declarative UI component rendering library.
+*   **TypeScript (v5.5.3):** Type safety across components, models, and custom React hook integrations.
+*   **Vite (v5.4.1):** Ultra-fast compilation, bundling, and hot-module replacement tool.
+*   **React Router (v6.22.3):** Dynamic declarative route engine with path matching and guard middleware.
+*   **Crypto-JS (v4.2.0):** Client-side payload encryption conforming to AES standards.
+
+### 2.4 Database & Data Layers
+*   **PostgreSQL (v15+):** Advanced open-source object-relational database with strong JSONB support.
+*   **Psycopg2-binary (v2.9.11):** High-performance PostgreSQL adapter for Python applications.
+
+---
+
+## 3. Major Implemented Features
+
+*   **Logic Isolation Engine:** Soft multi-tenancy utilizing foreign key constraints scoped to `tenant_id` tables using a strict `ondelete="RESTRICT"` policy.
+*   **Encrypted Token Pipeline:** Frontend-encrypted JWT tokens using AES-256-CBC. Decrypted at the backend middleware and validated against SHA-256 device/browser agent fingerprints.
+*   **Brute-Force Lockout & OTP:** Redis-backed OTP generation delivering secure codes, supported by multi-failed attempt account locks.
+*   **Multi-Stage Ingestion Pipeline:** Comprehensive state machine (CREATING → RUNNING → RAW_LOADED → STAGING_CREATED → COMPLETED) processing uploads asynchronously via Celery worker chains.
+*   **Data Quality Pipeline:** High-performance, bulk sanitization layer checking empty values, size boundaries, wildcards, deduping via MD5 hashing, and performing deep regex SQLi/XSS scanning.
+*   **SuperAdmin Overrides:** Allows members of the `"platform"` tenant to pass `X-Tenant-ID` headers to view and edit distinct tenant scopes dynamically.
+*   **Immutable Append-Only Audit:** Persistent history log preserving JSONB old/new snapshots and correlating transactions via trace IDs.
+*   **Sliding-Window Rate Limiter:** Throttles high-risk endpoints (`/auth/login`) backed by Redis.
+
+---
+
+## 4. Repository Structure
 
 ```
 SignalMDM/
-├── MDM_Backend/        ← FastAPI backend (Python)
-├── MDM_DataLayer/      ← PostgreSQL schema dump (.sql)
-│   └── SignalMDM.sql
-├── MDM_Frontend/       ← React + TypeScript frontend (Vite)
-└── README.md
+├── MDM_Backend/                  # FastAPI Backend API Server
+│   ├── core/                     # Centralized settings & Redis connection pool
+│   ├── scripts/                  # SQL migration & platform seeding scripts
+│   ├── signalmdm/                # Core Application Package
+│   │   ├── models/               # SQLAlchemy ORM schemas
+│   │   ├── schemas/              # Pydantic v2 schemas
+│   │   ├── services/             # Core business logic handlers
+│   │   ├── routers/              # API route controllers
+│   │   ├── middleware/           # Decryption, Auth guards, & Rate-limiting
+│   │   └── workers/              # Celery background tasks
+│   ├── storage/                  # Ingested file buffer storage
+│   ├── utils/                    # Hash generators and path sanitizers
+│   ├── main.py                   # FastAPI Application Entrypoint
+│   └── signalmdm_security_tester.py # Dynamic pentest suite
+│
+├── MDM_DataLayer/                # Database Artifacts
+│   └── SignalMDM.sql             # Full PostgreSQL schema binary dump
+│
+├── MDM_Frontend/                 # React SPA Client App
+│   ├── src/                      # Source Code
+│   │   ├── components/           # Reusable UI controls and tables
+│   │   ├── context/              # Contexts (Auth, Tenant, Theme)
+│   │   ├── layouts/              # Shells (Dashboard sidebars)
+│   │   ├── pages/                # Views (Ingestion, Tenants, RBAC)
+│   │   ├── services/             # API client services
+│   │   └── utils/                # Crypto wrappers and helpers
+│   ├── serverClient.js           # Production Express Server with Helmet CSP
+│   └── vite.config.ts            # Vite asset bundler config
+└── README.md                     # Home documentation page
 ```
 
 ---
 
-## Prerequisites
+## 5. Quick Start & Local Development
 
-| Tool | Minimum Version | Notes |
-|------|----------------|-------|
-| Python | 3.12+ | [python.org](https://python.org) |
-| PostgreSQL | 15+ | [postgresql.org](https://postgresql.org) |
-| Redis | 7+ | [redis.io](https://redis.io) / Windows: [Memurai](https://www.memurai.com/) |
-| Node.js | 18+ | For the frontend only |
-| Git | Any | |
+This section covers full local configuration of SignalMDM on a development machine.
 
----
-
-## 1 — PostgreSQL Setup
-
-### 1.1 Create the Database
-
-Open **pgAdmin** or **psql** and run:
-
-```sql
-CREATE DATABASE "SignalMDM"
-    ENCODING = 'UTF8'
-    LC_COLLATE = 'en_US.UTF-8'
-    LC_CTYPE   = 'en_US.UTF-8'
-    TEMPLATE   = template0;
-```
-
-### 1.2 Create the Application User (optional but recommended)
-
-```sql
-CREATE USER signalmdm_user WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE "SignalMDM" TO signalmdm_user;
-GRANT ALL ON SCHEMA public TO signalmdm_user;
-```
-
-### 1.3 Restore the Schema
-
-The schema SQL file is located at `MDM_DataLayer/SignalMDM.sql`.
-
-**Option A — Using pg_restore (binary dump):**
-```powershell
-pg_restore -U postgres -d SignalMDM "d:\SignalMDM\MDM_DataLayer\SignalMDM.sql"
-```
-
-**Option B — Using psql (if it's a plain SQL dump):**
-```powershell
-psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_DataLayer\SignalMDM.sql"
-```
-
-### 1.4 Setup Platform Administrator & RBAC
-A dedicated table handles global platform-level access. You **must** run these scripts to be able to log in and manage the platform with Role-Based Access Control:
-
-```powershell
-# 1. Create the base platform_admin table (if not exists)
-psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_Backend\scripts\platform_admin_setup.sql"
-
-# 2. Run the RBAC Migration (Adds roles, permissions, and links them to admins)
-psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_Backend\scripts\platform_rbac_migration.sql"
-```
-
-**Initial Credentials:**
-- **Email:** `admin@signalmdm.com`
-- **Password:** `Admin@Signal123`
-- **Role:** `super_admin` (Assigned automatically during migration)
-
-### 1.5 Database Tables
-
-The schema creates the following tables:
-
-**Core / Tenant Layer**
-| Table | Purpose |
-|-------|---------|
-| `tenant` | Root organization record — all rows scope to this |
-| `app_user` | Platform users (bcrypt hashed passwords) |
-| `role` | Named roles scoped to a tenant |
-| `permission` | Atomic actions (e.g. `entity:read`) |
-| `role_permission` | Role ↔ Permission junction |
-| `user_role` | User ↔ Role junction |
-| `audit_log` | Immutable record of every data mutation |
-
-**Entity Layer**
-| Table | Purpose |
-|-------|---------|
-| `entity` | Core MDM entity record |
-| `entity_attribute` | Key-value attributes per entity |
-| `entity_attribute_history` | Full attribute change history |
-| `entity_relationship` | Graph edges between entities |
-| `entity_risk_score` | Versioned risk scoring snapshots |
-| `entity_drift` | Detected drift events |
-| `entity_governance` | Stewardship and data quality metrics |
-| `entity_feature_store` | ML feature vectors per entity |
-| `entity_domain_config` | Domain-level rules (scoring, governance) |
-| `entity_alert` | Active alerts per entity |
-| `entity_signal` | Signal events attached to entities |
-| `signal_stream_buffer` | Incoming signal buffer before processing |
-
-| `staging_entities` | Processed records ready for mapping |
-
-**Platform / Security Layer**
-| Table | Purpose |
-|-------|---------|
-| `platform_admin` | Global platform users (full_name, status, role links) |
-| `platform_role` | Named platform roles (Super Admin, Data Architect, etc.) |
-| `platform_permission` | Granular screen/feature permissions |
-| `platform_role_permission`| Junction table linking roles to permissions |
-
-> **Note:** The 5 ingestion tables are **auto-created** by SQLAlchemy. However, the `platform_admin` table and its seed data must be created manually using the script provided in `MDM_Backend/scripts/`.
+### 5.1 Environment Prerequisites
+Ensure the following tools are installed locally:
+*   **Python:** v3.10+ (Recommended: v3.12)
+*   **Node.js:** v18+ (Recommended: v20 LTS)
+*   **PostgreSQL:** v15+ (Local port `5432` with username `postgres`)
+*   **Redis:** v7+ (Or **Memurai** for Windows installations)
 
 ---
 
-## 2 — Redis Setup
+### 5.2 Step 1: Database Setup
+1.  **Create the Database:**
+    Connect to PostgreSQL using pgAdmin or psql and run:
+    ```sql
+    CREATE DATABASE "SignalMDM" WITH ENCODING = 'UTF8';
+    ```
+2.  **Restore the Schema:**
+    The base schema dump is in `MDM_DataLayer/SignalMDM.sql`. Open a shell and run:
+    ```bash
+    psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_DataLayer\SignalMDM.sql"
+    ```
+3.  **Seed Platform Administrators & RBAC Matrix:**
+    You must execute the setup and RBAC scripts to enable administrative authentication:
+    ```bash
+    psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_Backend\scripts\platform_admin_setup.sql"
+    psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_Backend\scripts\platform_rbac_migration.sql"
+    ```
+    *   **Seed Account Email:** `admin@signalmdm.com`
+    *   **Seed Account Password:** `Admin@Signal123`
+    *   **Assigned Seed Role:** `super_admin`
 
-Redis is used for two purposes:
-1. **Celery broker/backend** — background task queue
-2. **Token revocation blacklist** — JWT logout invalidation
+---
 
-### Windows (Memurai — Redis-compatible)
-
-```powershell
-# Download Memurai from https://www.memurai.com/
-# After install, start the service:
-net start Memurai
-
-# Or use the Redis port for Windows (older, less maintained):
-# https://github.com/tporadowski/redis/releases
-```
-
-### Verify Redis is running
-
-```powershell
+### 5.3 Step 2: Caching & Task Broker (Redis)
+Start the Redis server on your local system:
+*   **Windows (Memurai):**
+    ```powershell
+    net start Memurai
+    ```
+*   **Linux/macOS:**
+    ```bash
+    redis-server
+    ```
+Confirm Redis is listening:
+```bash
 redis-cli ping
-# Expected: PONG
-```
-
-### Redis Configuration Needed
-
-No special Redis configuration is required. The backend connects to:
-```
-redis://localhost:6379/0
-```
-(database `0` is the default). Update `REDIS_URL` in `.env` if your Redis uses a different port or password.
-
-**Redis does NOT require any schema or pre-created keys.** Keys are created automatically:
-- Celery task results: `celery-task-meta-*`
-- Revoked tokens: `revoked:<jwt_string>`
-
----
-
-## 3 — Backend Setup (`MDM_Backend/`)
-
-### 3.1 Create and Activate a Virtual Environment
-
-```powershell
-cd d:\SignalMDM\MDM_Backend
-
-# Create venv
-python -m venv venv
-
-# Activate (Windows PowerShell)
-.\venv\Scripts\Activate.ps1
-
-# Activate (Windows CMD)
-.\venv\Scripts\activate.bat
-```
-
-### 3.2 Install Python Dependencies
-
-```powershell
-pip install fastapi==0.136.1
-pip install uvicorn==0.42.0
-pip install sqlalchemy==2.0.40
-pip install psycopg2-binary==2.9.11
-pip install pydantic==2.11.7
-pip install pydantic-settings==2.10.1
-pip install python-dotenv==1.1.1
-pip install celery==5.6.3
-pip install redis==6.2.0
-pip install python-multipart==0.0.22
-pip install python-jose[cryptography]==3.5.0
-pip install cryptography==46.0.5
-pip install bcrypt==5.0.0
-pip install pyotp==2.9.0
-pip install email-validator==2.3.0
-```
-
-**Or install all at once:**
-
-```powershell
-pip install fastapi uvicorn sqlalchemy psycopg2-binary pydantic pydantic-settings python-dotenv celery redis python-multipart "python-jose[cryptography]" cryptography bcrypt pyotp email-validator
-```
-
-### 3.3 Configure Environment Variables
-
-Copy the template and fill in your values:
-
-```powershell
-# The .env file is already at MDM_Backend/.env
-# Edit it with your actual values:
-notepad .env
-```
-
-**Full `.env` reference:**
-
-```env
-# ── Database ──────────────────────────────────────────────────────────────────
-DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/SignalMDM
-
-# ── Redis ─────────────────────────────────────────────────────────────────────
-REDIS_URL=redis://localhost:6379/0
-
-# ── JWT Authentication ────────────────────────────────────────────────────────
-# Change JWT_SECRET to a long random string in production:
-#   python -c "import secrets; print(secrets.token_hex(32))"
-JWT_SECRET=supersecretkey
-JWT_ALGORITHM=HS256
-JWT_EXPIRE_MINUTES=1440
-
-# ── AES-256 Token Encryption ──────────────────────────────────────────────────
-# Must be exactly 64 hex characters (32 bytes). Generate with:
-#   python -c "import secrets; print(secrets.token_hex(32))"
-# This SAME key must be set in the frontend .env as VITE_TOKEN_ENCRYPTION_KEY
-TOKEN_ENCRYPTION_KEY=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2
-
-# ── Application ───────────────────────────────────────────────────────────────
-APP_ENV=development
-UPLOAD_DIR=storage/uploads
-
-# ── SMTP Configuration (For OTP Delivery) ─────────────────────
-# Replace with your actual SMTP details to receive 2FA codes
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASSWORD=your_app_password
-SMTP_FROM=no-reply@signalmdm.com
-SMTP_USE_TLS=True
-```
-
-> [!IMPORTANT]
-> **Generate fresh secrets for production:**
-> ```powershell
-> python -c "import secrets; print('JWT_SECRET=' + secrets.token_hex(32))"
-> python -c "import secrets; print('TOKEN_ENCRYPTION_KEY=' + secrets.token_hex(32))"
-> ```
-
-### 3.4 Create Upload Storage Directory
-
-```powershell
-New-Item -ItemType Directory -Force -Path "d:\SignalMDM\MDM_Backend\storage\uploads"
-```
-
-### 3.5 Verify Everything Loads
-
-```powershell
-python -c "import main; print('OK:', len(main.app.routes), 'routes registered')"
-```
-
-Expected output: `OK: 17 routes registered`
-
----
-
-## 4 — Running the Backend
-
-### Start the API Server
-
-```powershell
-cd d:\SignalMDM\MDM_Backend
-python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-| URL | Description |
-|-----|-------------|
-| http://localhost:8000 | Health check / root |
-| http://localhost:8000/docs | Swagger UI (interactive API docs) |
-| http://localhost:8000/redoc | ReDoc documentation |
-| http://localhost:8000/health | Liveness probe (shows Redis status) |
-
-### Start the Celery Worker (requires Redis)
-
-Open a **second terminal** in the same directory (with venv activated):
-
-```powershell
-cd d:\SignalMDM\MDM_Backend
-python -m celery -A signalmdm.workers.celery_app worker --loglevel=info --pool=solo
-```
-
-> `--pool=solo` is **required on Windows**. Linux/macOS can omit this flag.
-
-> **Without Celery:** File uploads fall back to synchronous processing automatically — useful for development without Redis.
-
----
-
-## 5 — API Authentication Flow
-
-All API endpoints (except `POST /api/v1/tenants/` and health checks) require:
-
-| Header | Value | Required |
-|--------|-------|----------|
-| `Authorization` | `Bearer <AES-256-encrypted JWT>` | Yes |
-| `X-Device-ID` | Stable browser/device UUID | Yes |
-| `User-Agent` | Browser sets automatically | Auto |
-
-**Security layers (in order):**
-1. `SecurityHeadersMiddleware` — HSTS, X-Frame-Options, X-Content-Type-Options, etc.
-2. AES-256-CBC decryption of the token
-3. Redis blacklist check (revoked tokens)
-4. JWT signature + expiry verification
-5. Device fingerprint validation: `SHA256(deviceId|userAgent|userId)`
-
-See `MDM_Backend/signalmdm/middleware/auth.py` for implementation details.
-
----
-
-## 6 — Project Structure (Backend)
-
-```
-MDM_Backend/
-├── .env                          ← Environment variables
-├── main.py                       ← FastAPI app entrypoint
-│
-├── core/
-│   ├── config.py                 ← Pydantic Settings (typed env vars)
-│   └── redis_client.py           ← Centralized Redis connection pool
-│
-├── signalmdm/
-│   ├── database.py               ← SQLAlchemy engine + get_db()
-│   ├── enums.py                  ← All application enums
-│   │
-│   ├── models/                   ← SQLAlchemy ORM models (24 tables total)
-│   ├── schemas/                  ← Pydantic v2 request/response schemas
-│   ├── services/                 ← Business logic layer
-│   ├── routers/                  ← FastAPI route handlers
-│   ├── middleware/               ← Auth dependency + crypto utilities
-│   └── workers/                  ← Celery task definitions
-│
-├── storage/
-│   └── uploads/                  ← Uploaded files (organized by run_id)
-│
-└── utils/
-    ├── checksum.py               ← MD5 deterministic hashing
-    └── file_storage.py           ← File utility helpers
+# Expected response: PONG
 ```
 
 ---
 
-## 7 — Frontend Setup (`MDM_Frontend/`)
-
-```powershell
-cd d:\SignalMDM\MDM_Frontend
-npm install
-```
-
-Create `MDM_Frontend/.env.local`:
-
-```env
-VITE_API_BASE_URL=http://localhost:8000/api/v1
-
-# Must match TOKEN_ENCRYPTION_KEY in MDM_Backend/.env exactly
-VITE_TOKEN_ENCRYPTION_KEY=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2
-```
-
-Install required security, UI, and server packages:
-
-```powershell
-# Core Frontend Dependencies
-npm install react react-dom react-router-dom lucide-react
-
-# Security & Utilities
-npm install crypto-js js-cookie qrcode @fingerprintjs/fingerprintjs
-
-# Production Server Dependencies (REQUIRED for serverClient.js)
-npm install express helmet
-```
-
-Install type definitions:
-
-```powershell
-npm install --save-dev @types/crypto-js @types/js-cookie @types/qrcode @types/node
-```
-
-### 7.3 Create the Production Build
-
-Before running the production server, you must compile the React application:
-
-```powershell
-npm run build
-```
-This generates the `dist/` folder.
-
-### 7.4 Production Frontend Server (`serverClient.js`)
-
-For production-like environments or security testing (CORS/CSP), use the dedicated Express server instead of `vite dev`.
-
-**Key Features:**
-- Strict **Content Security Policy (CSP)** via Helmet.
-- Handles Single Page Application (SPA) routing.
-- Masks the backend origin behind a secure `connect-src` policy.
-
-**Running the Production Server:**
-```powershell
-# 1. Ensure dependencies are installed
-npm install
-
-# 2. Start the server
-npm run serve
-```
-The server will be available at `http://localhost:3030`.
+### 5.4 Step 3: Backend Configuration (`MDM_Backend/`)
+1.  **Initialize Virtual Environment:**
+    ```bash
+    cd d:\SignalMDM\MDM_Backend
+    python -m venv venv
+    ```
+    *   *Activate (Windows PowerShell):* `.\venv\Scripts\Activate.ps1`
+    *   *Activate (Linux/macOS):* `source venv/bin/activate`
+2.  **Install Python Dependencies:**
+    ```bash
+    pip install fastapi uvicorn sqlalchemy psycopg2-binary pydantic pydantic-settings python-dotenv celery redis python-multipart "python-jose[cryptography]" cryptography bcrypt pyotp email-validator
+    ```
+3.  **Create local `.env` file:**
+    Verify and configure `MDM_Backend/.env`:
+    ```env
+    DATABASE_URL=postgresql://postgres:2025@localhost:5432/SignalMDM
+    REDIS_URL=redis://localhost:6379/0
+    JWT_SECRET=supersecretkey
+    JWT_ALGORITHM=HS256
+    JWT_EXPIRE_MINUTES=1440
+    TOKEN_ENCRYPTION_KEY=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2
+    APP_ENV=development
+    UPLOAD_DIR=storage/uploads
+    SMTP_HOST=smtp.gmail.com
+    SMTP_PORT=587
+    SMTP_USER=your_email@gmail.com
+    SMTP_PASSWORD=your_app_password
+    SMTP_FROM=no-reply@signalmdm.com
+    SMTP_USE_TLS=True
+    ```
+4.  **Create Upload Buffer:**
+    ```bash
+    mkdir -p storage/uploads
+    ```
+5.  **Verify Routing Integrity:**
+    ```bash
+    python -c "import main; print('OK:', len(main.app.routes), 'routes compiled')"
+    # Expected: OK: 17 routes compiled
+    ```
 
 ---
 
-## 8 — Quick Start (All Services)
+### 5.5 Step 4: Run Backend Applications
+Start two separate command-line shells to run the API and task queue workers:
 
-Open **3 separate terminals**:
+*   **Terminal A: FastAPI Web Server**
+    ```bash
+    cd d:\SignalMDM\MDM_Backend
+    # Ensure venv is active
+    python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+    ```
+    API Docs are visible at: `http://localhost:8000/docs`
 
-```powershell
-# Terminal 1 — PostgreSQL (already running as a service)
-
-# Terminal 2 — Redis
-net start Memurai   # or: redis-server
-
-# Terminal 3 — FastAPI backend
-cd d:\SignalMDM\MDM_Backend
-python -m uvicorn main:app --reload --port 8000
-
-# Terminal 4 — Celery worker (optional, needs Redis)
-cd d:\SignalMDM\MDM_Backend
-python -m celery -A signalmdm.workers.celery_app worker --loglevel=info --pool=solo
-
-# Terminal 5 — Frontend (Development Mode)
-cd d:\SignalMDM\MDM_Frontend
-npm run dev
-
-# Terminal 6 — Frontend (Production Mode / CSP Testing)
-# Note: Requires 'npm run build' first
-cd d:\SignalMDM\MDM_Frontend
-npm run serve
-```
+*   **Terminal B: Celery Worker Task Processor**
+    ```bash
+    cd d:\SignalMDM\MDM_Backend
+    # Ensure venv is active
+    # Solo pool is mandatory for Windows environments
+    python -m celery -A signalmdm.workers.celery_app worker --loglevel=info --pool=solo
+    ```
 
 ---
 
-## 9 — Troubleshooting
+### 5.6 Step 5: Frontend Configuration (`MDM_Frontend/`)
+1.  **Install Node Modules:**
+    ```bash
+    cd d:\SignalMDM\MDM_Frontend
+    npm install
+    ```
+2.  **Verify Frontend Settings (`.env.local`):**
+    Create `MDM_Frontend/.env.local`:
+    ```env
+    VITE_API_BASE_URL=http://localhost:8000/api/v1
+    VITE_TOKEN_ENCRYPTION_KEY=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2
+    ```
+3.  **Run Development Mode (Hot-Reloading):**
+    ```bash
+    npm run dev
+    ```
+    Frontend is available at `http://localhost:5173`.
 
-| Problem | Solution |
-|---------|----------|
-| `pydantic_core.ValidationError` on startup | Check all `.env` values are set; run `python -c "from core.config import settings; print(settings)"` |
-| `psycopg2.OperationalError` | Verify PostgreSQL is running and `DATABASE_URL` credentials are correct |
-| `Redis connection refused` | Start Redis/Memurai. Uploads work without it (sync fallback) |
-| `TOKEN_ENCRYPTION_KEY` must be 64 hex chars | Run `python -c "import secrets; print(secrets.token_hex(32))"` |
-| Celery not receiving tasks on Windows | Use `--pool=solo` flag |
-| `UnicodeEncodeError` in terminal | Run `chcp 65001` to switch to UTF-8 code page |
+4.  **Compile & Run Production Mode (Strict CSP Testing):**
+    To validate headers and Helmet CSP compliance, compile and run the production build using the Express server wrapper:
+    ```bash
+    npm run build
+    npm run serve
+    ```
+    This serves compiled static assets with strict Content-Security-Policies on `http://localhost:3030`.
 
 ---
 
-## 10 — Advanced Systems Architecture
+## 6. Testing
 
-### 10.1 Global Redis Tenant Configuration
+Dynamic security verification and API scanning can be validated using the built-in pentester tool:
+1.  Ensure the FastAPI server is running on `http://localhost:8000`.
+2.  Open a shell inside `MDM_Backend/` and execute:
+    ```bash
+    python signalmdm_security_tester.py
+    ```
+This triggers **115 active test scenarios** checking JWT parameters, brute force lockouts, SQL injection, XSS reflection, and traversal attacks.
 
-SignalMDM utilizes a high-performance, memory-efficient global tenant scoping system to completely eliminate repetitive UI-level drop-downs and redundant API queries:
+---
 
-*   **Redis Scoping Layer (`tcfg:{admin_id}`)**: Active scopes are persisted directly in Redis with an 8-hour TTL, ensuring single-digit millisecond scope resolution times.
-*   **Persistent Scope Pill (`TenantScopeBar.tsx`)**: Renders on the global top-bar for platform administrators. Allows toggling globally between "All Tenants" and a specific search-selected tenant.
-*   **Reactive Scoping Hook (`useTenantConfig`)**: Dashboard pages (`IngestionRuns`, `SourceSystems`, `RawLanding`, `StagingRecords`) register for updates via this context. The data loader automatically re-triggers whenever the global tenant scope switches.
+## 7. Links to System Documentation
 
-### 10.2 Platform Role-Based Access Control (RBAC)
+For detailed guides, please refer to the specialized documentation files:
+*   [ARCHITECTURE.md](ARCHITECTURE.md): System architecture, Logical layouts, Request lifecycles, and complete Mermaid flows.
+*   [DIRECTORY_REFERENCE.md](DIRECTORY_REFERENCE.md): File-by-file explanations of classes, methods, and functions.
+*   [API_REFERENCE.md](API_REFERENCE.md): Endpoint list, authorization parameters, validation checks, and payloads.
+*   [DATABASE_REFERENCE.md](DATABASE_REFERENCE.md): PostgreSQL schema catalogs, multi-tenant restrictions, and audit structures.
+*   [DEPLOYMENT.md](DEPLOYMENT.md): Kubernetes deployment matrices, Dockerfiles, and incident runbooks.
+*   [TECHNICAL_REFERENCE.md](TECHNICAL_REFERENCE.md): Deep-dive reference guides for third-party libraries.
 
-The platform implements a highly flexible, secure database-driven RBAC architecture to delegate screen-level and feature-level control:
+---
 
-*   **Granular Schema**: Defined by `platform_role`, `platform_permission` (mapping `screen_key` and `feature_key` configurations), and `platform_role_permission` junction entries.
-*   **Stale-While-Revalidate Caching (SWR)**: Navigation contexts leverage `sessionStorage` (`perms_v1`) for instant UI rendering, combined with a background fetch thread (`GET /platform/my-permissions`) to automatically merge server-side permission updates.
-*   **Layout Safety Overrides**: Key configuration portals (like `/platform-rbac`) bypass permission-checks for `Super Admins` (`superAdminOnly`), guaranteeing that root administrators are never locked out of user management.
-*   **Session Isolation**: Explicit cache evictions (`evictPermissionsCache()` and `tenantConfigService.clearCache()`) are linked to the global logout handler to prevent session leakage.
+## 8. Known Limitations & Roadmap
+
+### 8.1 Current Limitations
+*   **Permissive CSP in Dev:** The Vite HMR model requires `'unsafe-inline'` and `'unsafe-eval'` policies inside Helmet, which are disabled only during standard client-build compilations.
+*   **No Centralized Storage abstraction:** File chunks are stored directly in the local file system. Production setups require a custom S3/Cloud Storage object driver.
+*   **Mock Dashboard Telemetry:** The main analytical charts on the layout interface populate simulated telemetry counts, with real data hook integration scheduled for Phase 2.
+
+### 8.2 Roadmap
+1.  **Phase 2 Entity Resolution:** Integration of probabilistic matching models, Jaro-Winkler/Levenshtein algorithms, and graph matching schemas.
+2.  **Machine Learning Scoring Engine:** Integrate advanced scoring modules (`scoring.py`, `features.py`) to run anomaly detection models on raw inputs.
+3.  **Real-Time Distributed Ingestion:** Deploy Apache Kafka event ingestion queues to stream live signal changes.

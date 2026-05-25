@@ -6,6 +6,7 @@ import { SnackbarProvider } from './context/SnackbarContext';
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
 import SourceSystems from './pages/source/SourceSystems';
+import Domains from './pages/domains/Domains';
 import IngestionRuns from './pages/ingestion/IngestionRuns';
 import RawLanding from './pages/rawlanding/RawLanding';
 import UploadData from './pages/upload/UploadData';
@@ -57,6 +58,7 @@ export default function App() {
             >
               <Route index element={<Placeholder title="Dashboard — Coming Soon" />} />
               <Route path="sources" element={<SourceSystems />} />
+              <Route path="domains" element={<Domains />} />
               <Route path="ingestion" element={<IngestionRuns />} />
               <Route path="upload" element={<UploadData />} />
               <Route path="raw-landing" element={<RawLanding />} />

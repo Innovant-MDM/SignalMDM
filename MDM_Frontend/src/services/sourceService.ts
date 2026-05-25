@@ -145,13 +145,13 @@ export const sourceService = {
 
   /**
    * Register a new source system.
-   * POST /api/v1/sources/register
+   * POST /api/v1/sources
    * 
    * @param tenantId Optional tenant UUID if calling as SuperAdmin
    */
   async registerSource(payload: SourceSystemCreatePayload, tenantId?: string): Promise<SourceRecord> {
     const headers = tenantId ? { 'X-Tenant-ID': tenantId } : undefined;
-    const res = await api.post<SourceSystemRead>('/sources/register', payload, headers);
+    const res = await api.post<SourceSystemRead>('/sources', payload, headers);
     if (!res.data) throw new Error('No data returned from server after registration.');
     return toSourceRecord(res.data);
   },

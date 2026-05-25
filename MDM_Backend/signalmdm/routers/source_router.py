@@ -27,9 +27,15 @@ router = APIRouter(prefix="/sources", tags=["Source Systems"])
 
 
 @router.post(
-    "/register",
+    "/",
     summary="Register a new source system",
     status_code=status.HTTP_201_CREATED,
+)
+@router.post(
+    "/register",
+    summary="Register a new source system (deprecated alias — use POST /sources)",
+    status_code=status.HTTP_201_CREATED,
+    deprecated=True,
 )
 def register_source(
     body: SourceSystemCreate,
