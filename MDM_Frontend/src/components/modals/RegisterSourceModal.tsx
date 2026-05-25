@@ -17,7 +17,6 @@ import '../../styles/theme.css';
 import '../../styles/RegisterSourceModal.css';
 
 /* ─── Types & constants ──────────────────────────────────────── */
-interface PriorityRow { attribute: string; priority: number }
 interface FormErrors { 
   tenantId?: string;
   sourceName?: string; 
@@ -27,40 +26,7 @@ interface FormErrors {
   supportedEntities?: string 
 }
 
-const DEFAULT_PRIORITY: Partial<Record<EntityType, PriorityRow[]>> = {
-  CUSTOMER: [
-    { attribute: 'customer_name', priority: 1 }, { attribute: 'email', priority: 1 }, { attribute: 'phone', priority: 2 }, { attribute: 'billing_address', priority: 3 },
-    { attribute: 'shipping_address', priority: 3 }, { attribute: 'date_of_birth', priority: 4 }, { attribute: 'loyalty_tier', priority: 4 }, { attribute: 'status', priority: 2 }, { attribute: 'created_at', priority: 5 }
-  ],
-  SUPPLIER: [
-    { attribute: 'supplier_name', priority: 1 }, { attribute: 'tax_id', priority: 1 }, { attribute: 'contact_email', priority: 2 }, { attribute: 'contact_phone', priority: 2 },
-    { attribute: 'payment_terms', priority: 3 }, { attribute: 'rating', priority: 4 }, { attribute: 'website_url', priority: 5 }, { attribute: 'supplier_status', priority: 2 }
-  ],
-  PRODUCT: [
-    { attribute: 'product_name', priority: 1 }, { attribute: 'sku', priority: 1 }, { attribute: 'category', priority: 2 }, { attribute: 'price', priority: 2 },
-    { attribute: 'stock_quantity', priority: 3 }, { attribute: 'manufacturer', priority: 3 }, { attribute: 'weight', priority: 4 }, { attribute: 'dimensions', priority: 4 }, { attribute: 'is_active', priority: 2 }
-  ],
-  ACCOUNT: [
-    { attribute: 'account_name', priority: 1 }, { attribute: 'account_number', priority: 1 }, { attribute: 'currency', priority: 2 }, { attribute: 'account_type', priority: 2 },
-    { attribute: 'balance', priority: 3 }, { attribute: 'branch_code', priority: 3 }, { attribute: 'swift_code', priority: 4 }, { attribute: 'opened_date', priority: 4 }
-  ],
-  ASSET: [
-    { attribute: 'asset_name', priority: 1 }, { attribute: 'asset_id', priority: 1 }, { attribute: 'location', priority: 2 }, { attribute: 'purchase_date', priority: 3 },
-    { attribute: 'value', priority: 3 }, { attribute: 'depreciation_rate', priority: 4 }, { attribute: 'status', priority: 2 }, { attribute: 'assigned_to', priority: 3 }
-  ],
-  LOCATION: [
-    { attribute: 'location_name', priority: 1 }, { attribute: 'address', priority: 1 }, { attribute: 'region', priority: 2 }, { attribute: 'country', priority: 2 },
-    { attribute: 'postal_code', priority: 3 }, { attribute: 'latitude', priority: 4 }, { attribute: 'longitude', priority: 4 }, { attribute: 'capacity', priority: 5 }
-  ],
-  EMPLOYEE: [
-    { attribute: 'name', priority: 1 }, { attribute: 'employee_id', priority: 1 }, { attribute: 'department', priority: 2 }, { attribute: 'role', priority: 2 },
-    { attribute: 'email', priority: 2 }, { attribute: 'phone', priority: 3 }, { attribute: 'hire_date', priority: 3 }, { attribute: 'manager_id', priority: 4 }, { attribute: 'salary_band', priority: 5 }
-  ],
-  OTHER: [
-    { attribute: 'name', priority: 1 }, { attribute: 'description', priority: 2 }, { attribute: 'type', priority: 2 }, { attribute: 'status', priority: 3 },
-    { attribute: 'metadata_json', priority: 4 }, { attribute: 'created_by', priority: 5 }
-  ],
-};
+
 
 const CONN_FIELDS: Record<ConnectionType, { field: string; label: string; type?: string; placeholder?: string }[]> = {
   REST_API: [{ field: 'baseUrl', label: 'Base URL', type: 'url', placeholder: 'https://api.example.com' }, { field: 'authType', label: 'Auth Type', placeholder: 'Bearer / OAuth2 / Basic' }, { field: 'apiKey', label: 'API Key', type: 'password', placeholder: '••••••••••••••••' }, { field: 'timeout', label: 'Timeout (ms)', type: 'number', placeholder: '30000' }],
@@ -83,8 +49,8 @@ const ENTITY_ICONS: Record<EntityType, string> = {
   EMPLOYEE: '👥',
   OTHER: '⚙️'
 };
-const STEP_LABELS_DEFAULT = ['Basic Info', 'Entities', 'Priority', 'Connection'];
-const STEP_LABELS_SUPER   = ['Select Tenant', 'Basic Info', 'Entities', 'Priority', 'Connection'];
+const STEP_LABELS_DEFAULT = ['Basic Info', 'Entities', 'Connection'];
+const STEP_LABELS_SUPER   = ['Select Tenant', 'Basic Info', 'Entities', 'Connection'];
 
 /* ─── Props ──────────────────────────────────────────────────── */
 interface Props {
@@ -107,7 +73,6 @@ export default function RegisterSourceModal({ onClose, onRegister }: Props) {
   const [sourceType, setSourceType] = useState<SourceType | ''>('');
   const [connectionType, setConnectionType] = useState<ConnectionType | ''>('');
   const [entities, setEntities] = useState<EntityType[]>([]);
-  const [priorityConfig, setPriorityConfig] = useState<Record<string, PriorityRow[]>>({});
   const [connConfig, setConnConfig] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<FormErrors>({});
   const [codeEdited, setCodeEdited] = useState(false);
@@ -137,15 +102,7 @@ export default function RegisterSourceModal({ onClose, onRegister }: Props) {
     }
   }, [sourceName, codeEdited]);
 
-  useEffect(() => {
-    setPriorityConfig(prev => {
-      const next: Record<string, PriorityRow[]> = {};
-      entities.forEach(e => { 
-        next[e] = prev[e] || DEFAULT_PRIORITY[e] || []; 
-      });
-      return next;
-    });
-  }, [entities]);
+
 
   const toggleEntity = (e: EntityType) =>
     setEntities(prev => prev.includes(e) ? prev.filter(x => x !== e) : [...prev, e]);
@@ -192,7 +149,6 @@ export default function RegisterSourceModal({ onClose, onRegister }: Props) {
         connection_type: connectionType as ConnectionType,
         config_json: {
           supported_entities: entities,
-          priority_config: priorityConfig,
           connection_config: connConfig,
         },
       }, isSuperAdmin ? targetTenantId : undefined);
@@ -322,48 +278,8 @@ export default function RegisterSourceModal({ onClose, onRegister }: Props) {
             </div>
           )}
 
-          {/* Step Priority (Step 3 or 4) */}
+          {/* Step Connection (Step 3 or 4) */}
           {step === (isSuperAdmin ? 4 : 3) && (
-            <div className="rsm-section">
-              <p className="rsm-section-desc">Configure attribute priority per entity. Lower number = higher priority.</p>
-              {entities.length === 0 && (
-                <div className="rsm-alert rsm-alert--info">No entities selected. Go back to Step 2.</div>
-              )}
-              {entities.map(entity => (
-                <div key={entity} className="rsm-priority-block">
-                  <div className="rsm-priority-block__header">
-                    <span className="rsm-priority-block__entity">{entity}</span>
-                  </div>
-                  <table className="rsm-priority-table">
-                    <thead>
-                      <tr><th>Attribute</th><th style={{ width: '120px' }}>Priority</th></tr>
-                    </thead>
-                    <tbody>
-                      {(priorityConfig[entity] || []).map((row, idx) => (
-                        <tr key={row.attribute}>
-                          <td><code className="rsm-attr-code">{row.attribute}</code></td>
-                          <td>
-                            <input
-                              type="number" min={1} max={10}
-                              className="rsm-priority-input"
-                              value={row.priority}
-                              onChange={e => setPriorityConfig(prev => ({
-                                ...prev,
-                                [entity]: prev[entity].map((r, i) => i === idx ? { ...r, priority: Number(e.target.value) } : r),
-                              }))}
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Step Connection (Step 4 or 5) */}
-          {step === (isSuperAdmin ? 5 : 4) && (
             <div className="rsm-section">
               {!connectionType ? (
                 <div className="rsm-alert rsm-alert--info">No connection type selected. Go back to Step 1.</div>
