@@ -53,7 +53,9 @@ INSERT INTO platform_permission (screen_key, feature_key, label, description) VA
   ('platform',      'view_users',     'View Platform Users',       'See platform admin user list'),
   ('platform',      'manage_users',   'Manage Platform Users',     'Create, edit, block platform users'),
   ('platform',      'view_roles',     'View Roles & Permissions',  'See RBAC roles and assignments'),
-  ('platform',      'manage_roles',   'Manage Roles & Permissions','Edit role permissions and screen access')
+  ('platform',      'manage_roles',   'Manage Roles & Permissions','Edit role permissions and screen access'),
+  ('domains',       'view',           'View Domains',              'Access the domains management screen'),
+  ('domains',       'manage',         'Manage Domains',            'Create, update and deactivate domains')
 ON CONFLICT (screen_key, feature_key) DO NOTHING;
 
 -- 3. Role-Permission join table
@@ -98,7 +100,8 @@ BEGIN
             ('ingestion','view'), ('ingestion','start'), ('ingestion','cancel'),
             ('upload','view'), ('upload','upload_file'),
             ('raw_landing','view'),
-            ('staging','view')
+            ('staging','view'),
+            ('domains','view'), ('domains','manage')
         )
         ON CONFLICT DO NOTHING;
 

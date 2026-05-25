@@ -124,19 +124,25 @@ Ensure the following tools are installed locally:
     ```sql
     CREATE DATABASE "SignalMDM" WITH ENCODING = 'UTF8';
     ```
-2.  **Restore the Schema:**
-    The base schema dump is in `MDM_DataLayer/SignalMDM.sql`. Open a shell and run:
-    ```bash
-    psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_DataLayer\SignalMDM.sql"
-    ```
-3.  **Seed Platform Administrators & RBAC Matrix:**
-    You must execute the setup and RBAC scripts to enable administrative authentication:
-    ```bash
-    psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_Backend\scripts\platform_admin_setup.sql"
-    psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_Backend\scripts\platform_rbac_migration.sql"
-    ```
-    *   **Seed Account Email:** `admin@signalmdm.com`
-    *   **Seed Account Password:** `Admin@Signal123`
+2.  **Initialize Schema and Seed Data:**
+    You can initialize the database using either of the following two options:
+
+    *   **Option A (Using the SQL Files):**
+        Open a shell and execute the base schema dump followed by the administration and RBAC setup scripts:
+        ```bash
+        # Restore base tables
+        psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_DataLayer\SignalMDM.sql"
+        # Seed platform administrators & roles
+        psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_Backend\scripts\platform_admin_setup.sql"
+        psql -U postgres -d SignalMDM -f "d:\SignalMDM\MDM_Backend\scripts\platform_rbac_migration.sql"
+        ```
+    *   **Option B (Copy & Paste Unified Script):**
+        Open the [DATABASE_REFERENCE.md](file:///d:/SignalMDM/DATABASE_REFERENCE.md) file and copy-paste the unified **PostgreSQL DDL Script** (Section 4) followed by the **Seed Data & Sample User Script** (Section 5) directly into your database query editor.
+
+3.  **Seeded SuperAdmin Credentials:**
+    *   **Seed Account Email:** `jofrey.joseph@flame.edu.in`
+    *   **Seed Account Username:** `Jofrey`
+    *   **Seed Account Password:** `Admin@123`
     *   **Assigned Seed Role:** `super_admin`
 
 ---

@@ -1,4 +1,4 @@
-"""
+r"""
 MDM_Backend\signalmdm\models\platform_role.py
 ----------------------------------
 Platform-level RBAC: roles + permissions for high-level stakeholders.

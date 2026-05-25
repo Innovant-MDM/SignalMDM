@@ -253,6 +253,35 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     print("[SignalMDM] Database tables verified / created.")
 
+    # Ensure missing columns in audit_log exist (incremental update)
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS approved_by VARCHAR(150) NULL;"))
+            conn.execute(text("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS approval_reason VARCHAR(500) NULL;"))
+            
+            # Seed domains permissions in the platform_permission catalog
+            conn.execute(text("""
+                INSERT INTO platform_permission (screen_key, feature_key, label, description)
+                VALUES 
+                    ('domains', 'view', 'View Domains', 'Access the domains management screen'),
+                    ('domains', 'manage', 'Manage Domains', 'Create, update and deactivate domains')
+                ON CONFLICT (screen_key, feature_key) DO NOTHING;
+            """))
+            
+            # Grant domains permissions to super_admin, admin, and data_architect platform roles
+            conn.execute(text("""
+                INSERT INTO platform_role_permission (role_id, permission_id)
+                SELECT r.role_id, p.permission_id
+                FROM platform_role r, platform_permission p
+                WHERE r.role_key IN ('super_admin', 'admin', 'data_architect')
+                  AND p.screen_key = 'domains'
+                ON CONFLICT DO NOTHING;
+            """))
+        print("[SignalMDM] Database migration check completed (audit_log columns and domains permissions verified).")
+    except Exception as e:
+        print(f"[SignalMDM] Database migration warning: {e}")
+
     # Warm Redis connection pool (non-blocking — errors are logged, not raised)
     from core.redis_client import is_redis_available
     redis_ok = is_redis_available()
