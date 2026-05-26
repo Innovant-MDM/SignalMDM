@@ -29,26 +29,26 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Import all models so SQLAlchemy sees them before create_all()
 # ---------------------------------------------------------------------------
-import signalmdm.models  # noqa: F401 — registers all mappers with Base
+import db.models  # noqa: F401 — registers all mappers with Base
 
-from signalmdm.database import engine, Base
+from db.sessions.database import engine, Base
 from core.config import settings
 
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
-from signalmdm.routers.tenant_router        import router as tenant_router
-from signalmdm.routers.source_router        import router as source_router
-from signalmdm.routers.ingestion_router     import router as ingestion_router
-from signalmdm.routers.raw_router           import router as raw_router
-from signalmdm.routers.platform_rbac_router import router as platform_rbac_router
-from signalmdm.routers.staging_router       import router as staging_router
-from signalmdm.routers.api_logs_router      import router as api_logs_router
-from signalmdm.routers.auth_router          import router as auth_router
-from signalmdm.routers.admin_router         import router as admin_router
-from signalmdm.routers.tenant_config_router import router as tenant_config_router
-from signalmdm.routers.upload_router        import router as upload_router
-from signalmdm.routers.domain_router        import router as domain_router
+from api.routes.tenant_router        import router as tenant_router
+from api.routes.source_router        import router as source_router
+from api.routes.ingestion_router     import router as ingestion_router
+from api.routes.raw_router           import router as raw_router
+from api.routes.platform_rbac_router import router as platform_rbac_router
+from api.routes.staging_router       import router as staging_router
+from api.routes.api_logs_router      import router as api_logs_router
+from api.routes.auth_router          import router as auth_router
+from api.routes.admin_router         import router as admin_router
+from api.routes.tenant_config_router import router as tenant_config_router
+from api.routes.upload_router        import router as upload_router
+from api.routes.domain_router        import router as domain_router
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +318,7 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 
 # 1. Rate limiting (applied first/innermost after routing)
-from signalmdm.middleware.rate_limit import RateLimitingMiddleware
+from middleware.rate_limit import RateLimitingMiddleware
 app.add_middleware(RateLimitingMiddleware)
 
 # 2. Response envelope (wraps successful JSON responses)
