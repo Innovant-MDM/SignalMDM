@@ -10,6 +10,7 @@ import {
 } from '../../services/uploadSessionService';
 import { ApiError } from '../../services/api';
 import { useSnackbar } from '../../context/SnackbarContext';
+import { domainService, type DomainRecord } from '../../services/domainService';
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -142,6 +143,7 @@ export default function UploadData() {
   const [newSessionName, setNewSessionName] = useState('');
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [creating, setCreating] = useState(false);
+  const [availableDomains, setAvailableDomains] = useState<DomainRecord[]>([]);
 
   // ── file upload form (within a session) ──
   const [pendingEntries, setPendingEntries] = useState<PendingEntry[]>([]);
@@ -164,6 +166,15 @@ export default function UploadData() {
     }
   }, []);
 
+  const loadDomains = useCallback(async (tid?: string | null) => {
+    try {
+      const data = await domainService.listDomains(0, 100, tid ?? undefined);
+      setAvailableDomains(data);
+    } catch (e) {
+      console.error('Failed to load domains', e);
+    }
+  }, []);
+
   // Detect platform admin from cookie
   useEffect(() => {
     const info = authService.getAdminInfoFromCookie();
@@ -174,8 +185,11 @@ export default function UploadData() {
   // Reload sessions whenever the global active tenant changes
   useEffect(() => {
     setPageLoading(true);
-    loadSessions(activeTenantId).finally(() => setPageLoading(false));
-  }, [activeTenantId, loadSessions]);
+    Promise.all([
+      loadSessions(activeTenantId),
+      loadDomains(activeTenantId)
+    ]).finally(() => setPageLoading(false));
+  }, [activeTenantId, loadSessions, loadDomains]);
 
   // ── tenant filter ─────────────────────────────────────────────────────────
   // NOTE: Tenant selection is now handled globally by TenantScopeBar in MainLayout.
@@ -550,12 +564,16 @@ export default function UploadData() {
                 )}
                 <div className={`up-field${formErrors.domain ? ' up-field--error' : ''}`}>
                   <label className="up-label">Domain <span className="up-required">*</span></label>
-                  <input
+                  <select
                     className="up-input"
-                    placeholder="e.g. Student, Finance, HR"
                     value={newDomain}
                     onChange={e => setNewDomain(e.target.value)}
-                  />
+                  >
+                    <option value="">-- Select a Domain --</option>
+                    {availableDomains.map(d => (
+                      <option key={d.id} value={d.domainName}>{d.domainName}</option>
+                    ))}
+                  </select>
                   {formErrors.domain && <span className="up-error-msg">{formErrors.domain}</span>}
                 </div>
                 <div className={`up-field${formErrors.sessionName ? ' up-field--error' : ''}`}>
