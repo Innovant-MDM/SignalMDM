@@ -239,7 +239,6 @@ function UsersTab({ roles }: { roles: PlatformRole[] }) {
   };
 
   const handleToggle2FA = async (u: PlatformUser) => {
-    const action = u.two_fa_enabled ? 'Disable' : 'Enable';
     const message = u.two_fa_enabled
       ? `Are you sure you want to disable Multi-Factor Authentication (2FA) for ${u.email}? This will delete their current authenticator secret and configuration.`
       : `Require Multi-Factor Authentication (2FA) for ${u.email}? They will be prompted to setup an authenticator app upon their next login.`;
