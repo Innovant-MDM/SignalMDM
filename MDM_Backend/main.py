@@ -50,6 +50,17 @@ from api.routes.tenant_config_router import router as tenant_config_router
 from api.routes.upload_router        import router as upload_router
 from api.routes.domain_router        import router as domain_router
 
+# Phase 2 Routers
+from api.routes.mdm_phase2 import (
+    canonical_models_router,
+    field_mappings_router,
+    mapping_errors_router,
+    normalization_runs_router,
+    standardization_rules_router,
+    transformation_rules_router,
+)
+
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -260,25 +271,69 @@ async def lifespan(app: FastAPI):
             conn.execute(text("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS approved_by VARCHAR(150) NULL;"))
             conn.execute(text("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS approval_reason VARCHAR(500) NULL;"))
             
-            # Seed domains permissions in the platform_permission catalog
+            # Seed domains and Phase 2 permissions in the platform_permission catalog
             conn.execute(text("""
                 INSERT INTO platform_permission (screen_key, feature_key, label, description)
                 VALUES 
                     ('domains', 'view', 'View Domains', 'Access the domains management screen'),
-                    ('domains', 'manage', 'Manage Domains', 'Create, update and deactivate domains')
+                    ('domains', 'manage', 'Manage Domains', 'Create, update and deactivate domains'),
+                    
+                    ('canonical_models', 'view', 'View Canonical Models', 'Access the canonical fields definition screen'),
+                    ('canonical_models', 'manage', 'Manage Canonical Models', 'Create, update, and delete canonical fields'),
+
+                    ('field_mappings', 'view', 'View Field Mappings', 'Access the schema source-to-target field mapping screen'),
+                    ('field_mappings', 'manage', 'Manage Field Mappings', 'Configure and update field mapping relationships'),
+
+                    ('transformation_rules', 'view', 'View Transformation Rules', 'Access the transformation rules list'),
+                    ('transformation_rules', 'manage', 'Manage Transformation Rules', 'Create, edit, and delete transformation rules'),
+
+                    ('standardization_rules', 'view', 'View Standardization Rules', 'Access the standardization lookup and rules list'),
+                    ('standardization_rules', 'manage', 'Manage Standardization Rules', 'Create, edit, and delete standardization rules'),
+
+                    ('normalization_runs', 'view', 'View Normalization Runs', 'Access and monitor background normalization jobs'),
+                    ('normalization_runs', 'manage', 'Manage Normalization Runs', 'Trigger, cancel, and manage normalization execution batches'),
+
+                    ('normalized_records', 'view', 'View Normalized Records', 'View successful standardized canonical records'),
+
+                    ('mapping_errors', 'view', 'View Mapping Errors', 'View and browse normalization and validation errors'),
+                    ('mapping_errors', 'manage', 'Manage Mapping Errors', 'Resolve, edit mapping configurations, and trigger retry runs')
                 ON CONFLICT (screen_key, feature_key) DO NOTHING;
             """))
             
-            # Grant domains permissions to super_admin, admin, and data_architect platform roles
+            # Grant domains and Phase 2 permissions to super_admin, admin, and data_architect platform roles
             conn.execute(text("""
                 INSERT INTO platform_role_permission (role_id, permission_id)
                 SELECT r.role_id, p.permission_id
                 FROM platform_role r, platform_permission p
                 WHERE r.role_key IN ('super_admin', 'admin', 'data_architect')
-                  AND p.screen_key = 'domains'
+                  AND p.screen_key IN ('domains', 'canonical_models', 'field_mappings', 'transformation_rules', 'standardization_rules', 'normalization_runs', 'normalized_records', 'mapping_errors')
                 ON CONFLICT DO NOTHING;
             """))
-        print("[SignalMDM] Database migration check completed (audit_log columns and domains permissions verified).")
+
+            # Grant Phase 2 permissions to data_manager platform role
+            conn.execute(text("""
+                INSERT INTO platform_role_permission (role_id, permission_id)
+                SELECT r.role_id, p.permission_id
+                FROM platform_role r, platform_permission p
+                WHERE r.role_key = 'data_manager'
+                  AND (
+                    (p.screen_key IN ('canonical_models', 'field_mappings', 'transformation_rules', 'standardization_rules', 'normalized_records') AND p.feature_key = 'view')
+                    OR (p.screen_key IN ('normalization_runs', 'mapping_errors'))
+                  )
+                ON CONFLICT DO NOTHING;
+            """))
+
+            # Grant Phase 2 permissions to executive platform role
+            conn.execute(text("""
+                INSERT INTO platform_role_permission (role_id, permission_id)
+                SELECT r.role_id, p.permission_id
+                FROM platform_role r, platform_permission p
+                WHERE r.role_key = 'executive'
+                  AND p.screen_key IN ('canonical_models', 'field_mappings', 'transformation_rules', 'standardization_rules', 'normalization_runs', 'normalized_records', 'mapping_errors')
+                  AND p.feature_key = 'view'
+                ON CONFLICT DO NOTHING;
+            """))
+        print("[SignalMDM] Database migration check completed (audit_log columns, domains, and Phase 2 permissions verified).")
     except Exception as e:
         print(f"[SignalMDM] Database migration warning: {e}")
 
@@ -403,6 +458,15 @@ app.include_router(admin_router,         prefix=PREFIX)
 app.include_router(tenant_config_router, prefix=PREFIX)
 app.include_router(upload_router,        prefix=PREFIX)
 app.include_router(domain_router,        prefix=PREFIX)
+
+# Phase 2 Router Inclusions
+app.include_router(canonical_models_router,      prefix=PREFIX)
+app.include_router(field_mappings_router,        prefix=PREFIX)
+app.include_router(mapping_errors_router,        prefix=PREFIX)
+app.include_router(normalization_runs_router,    prefix=PREFIX)
+app.include_router(standardization_rules_router, prefix=PREFIX)
+app.include_router(transformation_rules_router,  prefix=PREFIX)
+
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ celery = Celery(
     include=[
         "workers.raw_worker",
         "workers.staging_worker",
+        "workers.mdm_phase2.normalization_worker",
     ],
 )
 

@@ -27,6 +27,18 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    group: 'Mapping & Normalization',
+    items: [
+      { label: 'Canonical Models',    path: '/canonical-models',    icon: '✥', screen: 'canonical_models' },
+      { label: 'Field Mappings',       path: '/field-mappings',       icon: '⇌', screen: 'field_mappings' },
+      { label: 'Transformation Rules', path: '/transformation-rules', icon: '⌥', screen: 'transformation_rules' },
+      { label: 'Standardization Rules',path: '/standardization-rules',icon: '⚿', screen: 'standardization_rules' },
+      { label: 'Normalization Runs',   path: '/normalization-runs',   icon: '⏵', screen: 'normalization_runs' },
+      { label: 'Normalized Records',   path: '/normalized-records',   icon: '⊜', screen: 'normalized_records' },
+      { label: 'Mapping Errors',       path: '/mapping-errors',       icon: '⚠', screen: 'mapping_errors' },
+    ],
+  },
+  {
     group: 'Admin',
     items: [
       { label: 'API Logs',        path: '/api-logs',      icon: '≡', screen: 'api_logs' },

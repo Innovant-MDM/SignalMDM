@@ -16,6 +16,13 @@ import SystemHealth from './pages/admin/SystemHealth';
 import ApiLogs from './pages/apilogs/ApiLogs';
 import DevSetup from './pages/DevSetup';
 import PlatformRBAC from './pages/platform/PlatformRBAC';
+import CanonicalModelsPage from './pages/mdm_phase2/CanonicalModelsPage';
+import FieldMappingsPage from './pages/mdm_phase2/FieldMappingsPage';
+import TransformationRulesPage from './pages/mdm_phase2/TransformationRulesPage';
+import StandardizationRulesPage from './pages/mdm_phase2/StandardizationRulesPage';
+import NormalizationRunsPage from './pages/mdm_phase2/NormalizationRunsPage';
+import NormalizedRecordsPage from './pages/mdm_phase2/NormalizedRecordsPage';
+import MappingErrorsPage from './pages/mdm_phase2/MappingErrorsPage';
 import './index.css';
 
 function Placeholder({ title }: { title: string }) {
@@ -63,6 +70,16 @@ export default function App() {
               <Route path="upload" element={<UploadData />} />
               <Route path="raw-landing" element={<RawLanding />} />
               <Route path="staging" element={<StagingRecords />} />
+
+              {/* MDM Phase 2 Routing */}
+              <Route path="canonical-models" element={<CanonicalModelsPage />} />
+              <Route path="field-mappings" element={<FieldMappingsPage />} />
+              <Route path="transformation-rules" element={<TransformationRulesPage />} />
+              <Route path="standardization-rules" element={<StandardizationRulesPage />} />
+              <Route path="normalization-runs" element={<NormalizationRunsPage />} />
+              <Route path="normalized-records" element={<NormalizedRecordsPage />} />
+              <Route path="mapping-errors" element={<MappingErrorsPage />} />
+
               <Route path="tenants" element={<Tenants />} />
               <Route path="api-logs" element={<ApiLogs />} />
               <Route path="system-health" element={<SystemHealth />} />

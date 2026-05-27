@@ -425,6 +425,10 @@ function RolesTab() {
   const screenLabels: Record<string, string> = {
     dashboard: 'Dashboard', sources: 'Source Systems', ingestion: 'Ingestion Runs',
     upload: 'Upload Data', raw_landing: 'Raw Landing', staging: 'Staging Records',
+    canonical_models: 'Canonical Models', field_mappings: 'Field Mappings',
+    transformation_rules: 'Transformation Rules', standardization_rules: 'Standardization Rules',
+    normalization_runs: 'Normalization Runs', normalized_records: 'Normalized Records',
+    mapping_errors: 'Mapping & Validation Errors',
     api_logs: 'API Logs', system_health: 'System Health', tenants: 'Tenants', platform: 'Platform Admin',
   };
 

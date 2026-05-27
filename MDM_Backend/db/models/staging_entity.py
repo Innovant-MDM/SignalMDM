@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import DateTime, ForeignKey, String, func, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from db.models.tenant import Tenant
     from db.models.ingestion_run import IngestionRun
     from db.models.raw_record import RawRecord
+    from db.models.mdm_phase2.normalization_run import NormalizationRun
 
 
 class StagingEntity(Base):
@@ -93,6 +94,34 @@ class StagingEntity(Base):
         nullable=True,
         comment="Set in Phase 2 when the entity domain is resolved.",
     )
+    normalization_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("normalization_runs.run_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    mapped_payload_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+    standardized_payload_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+    normalization_status: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        default="PENDING",
+        index=True,
+    )
+    normalized_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    normalization_error: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -105,6 +134,7 @@ class StagingEntity(Base):
     tenant: Mapped["Tenant"] = relationship(back_populates="staging_entities")
     ingestion_run: Mapped["IngestionRun"] = relationship(back_populates="staging_entities")
     raw_record: Mapped["RawRecord"] = relationship(back_populates="staging_entity")
+    normalization_run: Mapped[Optional["NormalizationRun"]] = relationship(back_populates="staging_entities")
 
     def __repr__(self) -> str:
         return f"<StagingEntity id={self.staging_id} state={self.state!r} run={self.run_id}>"

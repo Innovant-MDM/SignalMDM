@@ -47,6 +47,16 @@ from db.models.platform_admin import PlatformAdmin
 from db.models.upload_session import UploadSession, UploadSessionFile
 from db.models.domain         import Domain
 
+# ---------------------------------------------------------------------------
+# Phase 2 — Mapping & Standardization models
+# ---------------------------------------------------------------------------
+from db.models.mdm_phase2.canonical_field       import CanonicalField
+from db.models.mdm_phase2.transformation_rule    import TransformationRule
+from db.models.mdm_phase2.standardization_rule   import StandardizationRule
+from db.models.mdm_phase2.field_mapping          import FieldMapping
+from db.models.mdm_phase2.normalization_run      import NormalizationRun
+from db.models.mdm_phase2.mapping_error          import MappingError
+
 __all__ = [
     # Core
     "Tenant",
@@ -82,4 +92,11 @@ __all__ = [
     "UploadSessionFile",
     # Domains
     "Domain",
+    # Phase 2
+    "CanonicalField",
+    "TransformationRule",
+    "StandardizationRule",
+    "FieldMapping",
+    "NormalizationRun",
+    "MappingError",
 ]
