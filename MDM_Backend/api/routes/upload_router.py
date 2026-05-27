@@ -507,22 +507,32 @@ def delete_file(
 
     old_val = jsonable_encoder(_file_read(sf))
     db.delete(sf)
-    
-    try:
-        log_action(
-            db,
-            tenant_id=uuid.UUID(str(target_tenant)) if target_tenant != "platform" else None,
-            entity_name="UploadSessionFile",
-            entity_id=file_id,
-            operation_type="DELETE",
-            old_value=old_val,
-            performed_by=auth.username,
-            source_ip=request.client.host if request.client else None,
-            autocommit=False,
-        )
-    except Exception as e:
-        logger.error(f"Failed to write audit log: {e}")
 
-    db.commit()
+    # Best-effort audit. Isolated in a SAVEPOINT so any failure on the
+    # audit_log write (schema drift, constraint, etc.) cannot fail the
+    # user-facing file deletion. The outer transaction stays valid.
+    try:
+        with db.begin_nested():
+            log_action(
+                db,
+                tenant_id=uuid.UUID(str(target_tenant)) if target_tenant != "platform" else None,
+                entity_name="UploadSessionFile",
+                entity_id=file_id,
+                operation_type="DELETE",
+                old_value=old_val,
+                performed_by=auth.username,
+                source_ip=request.client.host if request.client else None,
+                autocommit=False,
+            )
+            db.flush()
+    except Exception as e:
+        logger.error("Failed to write audit log for UploadSessionFile delete: %s", e)
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error("Failed to commit UploadSessionFile delete: %s", e)
+        raise HTTPException(status_code=500, detail="Could not delete file.") from e
 
     return ok(message="File removed from session.")
