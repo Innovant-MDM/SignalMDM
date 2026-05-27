@@ -56,11 +56,9 @@ export const normalizationService = {
     return res.data ?? [];
   },
 
-  /**
-   * Get details/status of a specific normalization run.
-   */
-  async getRunStatus(runId: string): Promise<NormalizationRunRead> {
-    const res = await api.get<NormalizationRunRead>(`/mdm/normalization-runs/${runId}/status`);
+  async getRunStatus(runId: string, tenantId?: string): Promise<NormalizationRunRead> {
+    const headers = tenantId ? { 'X-Tenant-ID': tenantId } : undefined;
+    const res = await api.get<NormalizationRunRead>(`/mdm/normalization-runs/${runId}/status`, headers);
     if (!res.data) throw new Error('No data returned from server for normalization run status.');
     return res.data;
   },

@@ -42,12 +42,17 @@ def list_mapping_errors(
 )
 def retry_mapping_error(
     error_id: uuid.UUID,
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
     auth: TokenPayload = Depends(require_auth),
 ):
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
     result = retry_service.retry_mapping_error(
         db,
-        tenant_id=auth.tenant_id,
+        tenant_id=target_tenant,
         error_id=error_id,
         performed_by=auth.user_id,
     )

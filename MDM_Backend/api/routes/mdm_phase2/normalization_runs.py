@@ -68,10 +68,15 @@ def list_normalization_runs(
 )
 def get_normalization_run_status(
     run_id: uuid.UUID,
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
     auth: TokenPayload = Depends(require_auth),
 ):
-    run = normalization_service.get_normalization_run(db, tenant_id=auth.tenant_id, run_id=run_id)
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
+    run = normalization_service.get_normalization_run(db, tenant_id=target_tenant, run_id=run_id)
     return ok(
         data=NormalizationRunRead.model_validate(run).model_dump(),
         message=f"Normalization run status: {run.status}.",

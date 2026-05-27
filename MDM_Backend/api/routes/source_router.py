@@ -99,11 +99,15 @@ def list_sources(
 )
 def get_source(
     source_id: uuid.UUID,
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
     auth: TokenPayload = Depends(require_auth),
 ):
     """Fetch a single source system scoped to the authenticated tenant."""
-    source = source_service.get_source(db, tenant_id=auth.tenant_id, source_system_id=source_id)
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+    source = source_service.get_source(db, tenant_id=target_tenant, source_system_id=source_id)
     return ok(data=SourceSystemRead.model_validate(source).model_dump())
 
 
@@ -113,13 +117,18 @@ def get_source(
 )
 def deactivate_source(
     source_id: uuid.UUID,
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
     auth: TokenPayload = Depends(require_admin),   # admin only
 ):
     """Soft-deactivate (is_active=False). Restricted to admin role."""
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
     source = source_service.deactivate_source(
         db,
-        tenant_id=auth.tenant_id,
+        tenant_id=target_tenant,
         source_system_id=source_id,
         performed_by=auth.user_id,
     )
@@ -136,13 +145,18 @@ def deactivate_source(
 def update_status(
     source_id: uuid.UUID,
     status: StatusEnum,
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
     auth: TokenPayload = Depends(require_admin),
 ):
     """Change status to ACTIVE, SUSPENDED, ARCHIVED, or DEACTIVATED."""
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
     source = source_service.update_source_status(
         db,
-        tenant_id=auth.tenant_id,
+        tenant_id=target_tenant,
         source_system_id=source_id,
         new_status=status,
         performed_by=auth.user_id,

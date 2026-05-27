@@ -76,12 +76,17 @@ def list_field_mappings(
 def update_field_mapping(
     mapping_id: uuid.UUID,
     body: FieldMappingCreate,
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
     auth: TokenPayload = Depends(require_auth),
 ):
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
     mapping = mapping_service.update_field_mapping(
         db,
-        tenant_id=auth.tenant_id,
+        tenant_id=target_tenant,
         mapping_id=mapping_id,
         data=body,
         performed_by=auth.user_id,
@@ -98,12 +103,17 @@ def update_field_mapping(
 )
 def delete_field_mapping(
     mapping_id: uuid.UUID,
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
     auth: TokenPayload = Depends(require_auth),
 ):
+    target_tenant = auth.tenant_id
+    if auth.tenant_id == "platform" and x_tenant_id:
+        target_tenant = x_tenant_id
+
     result = mapping_service.delete_field_mapping(
         db,
-        tenant_id=auth.tenant_id,
+        tenant_id=target_tenant,
         mapping_id=mapping_id,
         performed_by=auth.user_id,
     )

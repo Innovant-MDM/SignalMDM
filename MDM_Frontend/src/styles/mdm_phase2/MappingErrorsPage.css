@@ -1,1 +1,2 @@
-/* CSS styles for MappingErrorsPage */
+/* MappingErrorsPage.css – shares NormalizationRunsPage.css tokens */
+@import './NormalizationRunsPage.css';

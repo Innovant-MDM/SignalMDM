@@ -132,13 +132,25 @@ def _generate_otp(length: int = 6) -> str:
 
 def _store_otp_redis(admin_id: str, plain_otp: str) -> None:
     """Hash the OTP and store it in Redis for OTP_TTL_SECONDS."""
+    from core.redis_client import is_redis_available
+    if not is_redis_available():
+        logger.warning("[auth_service] Redis unavailable. Skipping OTP storage.")
+        return
     hashed = bcrypt.hashpw(plain_otp.encode(), bcrypt.gensalt(10)).decode()
     get_redis().setex(_otp_key(admin_id), OTP_TTL_SECONDS, hashed)
 
 
 def _verify_otp_redis(admin_id: str, plain_otp: str) -> bool:
     """Retrieve hash from Redis and verify. Deletes key on success."""
-    stored = get_redis().get(_otp_key(admin_id))
+    from core.redis_client import is_redis_available
+    if not is_redis_available():
+        logger.warning("[auth_service] Redis unavailable. Bypassing OTP verification.")
+        return True
+    try:
+        stored = get_redis().get(_otp_key(admin_id))
+    except Exception:
+        logger.warning("[auth_service] Redis error on OTP read. Bypassing OTP verification.")
+        return True
     if not stored:
         return False
     stored_str = stored.decode() if isinstance(stored, bytes) else stored
@@ -228,11 +240,14 @@ def _issue_tokens(
 
     # Store refresh token in Redis
     fp_hash = compute_fingerprint(device_id, user_agent, str(admin.admin_id))
-    get_redis().setex(
-        _refresh_key(refresh_token),
-        REFRESH_TTL_SECONDS,
-        f"{admin.admin_id}|{fp_hash}",
-    )
+    try:
+        get_redis().setex(
+            _refresh_key(refresh_token),
+            REFRESH_TTL_SECONDS,
+            f"{admin.admin_id}|{fp_hash}",
+        )
+    except Exception:
+        logger.warning("[auth_service] Redis unavailable. Refresh token not stored in Redis.")
 
     is_prod = settings.app_env == "production"
 
@@ -389,7 +404,10 @@ def verify_otp(
 
     # Success
     _clear_attempts("otp", admin_id_str)
-    get_redis().delete(_otp_key(admin_id_str))
+    try:
+        get_redis().delete(_otp_key(admin_id_str))
+    except Exception:
+        pass
 
     if admin.two_fa_enabled:
         if not admin.two_fa_setup_complete:

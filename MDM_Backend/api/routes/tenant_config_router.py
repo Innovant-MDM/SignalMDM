@@ -44,6 +44,8 @@ def _key(admin_id: str) -> str:
     return f"{_PREFIX}{admin_id}"
 
 
+_fallback_cache: dict[str, dict] = {}
+
 def _read(admin_id: str) -> dict:
     """Read current config; returns {'m':'ALL'} if not set."""
     try:
@@ -52,12 +54,15 @@ def _read(admin_id: str) -> dict:
             return json.loads(raw)
     except Exception:
         pass
-    return {"m": "ALL"}
+    return _fallback_cache.get(admin_id, {"m": "ALL"})
 
 
 def _write(admin_id: str, payload: dict) -> None:
     """Persist config with TTL refresh."""
-    get_redis().setex(_key(admin_id), _TTL, json.dumps(payload, separators=(",", ":")))
+    try:
+        get_redis().setex(_key(admin_id), _TTL, json.dumps(payload, separators=(",", ":")))
+    except Exception:
+        _fallback_cache[admin_id] = payload
 
 
 def _delete(admin_id: str) -> None:
@@ -65,6 +70,7 @@ def _delete(admin_id: str) -> None:
         get_redis().delete(_key(admin_id))
     except Exception:
         pass
+    _fallback_cache.pop(admin_id, None)
 
 
 def _to_response(cfg: dict) -> dict:

@@ -1,1 +1,2 @@
-/* CSS styles for NormalizedRecordsPage */
+/* NormalizedRecordsPage.css – shares NormalizationRunsPage.css tokens */
+@import './NormalizationRunsPage.css';
