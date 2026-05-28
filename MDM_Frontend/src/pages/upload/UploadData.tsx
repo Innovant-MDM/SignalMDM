@@ -210,6 +210,23 @@ export default function UploadData() {
     }
   };
 
+  const handleDeleteSession = async (session: UploadSession) => {
+    if (!window.confirm(`Delete session "${session.session_name}" and all its files?`)) return;
+    try {
+      await uploadSessionService.deleteSession(session.session_id, activeTenantId ?? undefined);
+      if (activeSession?.session_id === session.session_id) {
+        setActiveSession(null);
+        setView('list');
+      }
+      await loadSessions(activeTenantId);
+      snackbar.showSuccess(`Session "${session.session_name}" deleted.`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Delete failed';
+      setPageError(msg);
+      snackbar.showError(`Failed to delete session: ${msg}`);
+    }
+  };
+
   // ── new session ───────────────────────────────────────────────────────────
 
   const validateSessionForm = () => {
@@ -543,6 +560,17 @@ export default function UploadData() {
                     <span className={`up-session-status up-session-status--${s.status.toLowerCase()}`}>
                       {s.status}
                     </span>
+                    <button
+                      className="up-btn up-btn--danger up-btn--sm"
+                      type="button"
+                      title="Delete session"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleDeleteSession(s);
+                      }}
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
               ))}

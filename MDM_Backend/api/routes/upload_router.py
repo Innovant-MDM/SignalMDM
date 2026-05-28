@@ -325,7 +325,70 @@ def get_session(
 
 
 # ---------------------------------------------------------------------------
-# 4. Upload files into a session
+# 4. Delete a session
+# ---------------------------------------------------------------------------
+
+@router.delete(
+    "/sessions/{session_id}",
+    summary="Delete an upload session and all files",
+)
+def delete_session(
+    session_id: uuid.UUID,
+    request: Request,
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+    auth: TokenPayload = Depends(require_auth),
+):
+    target_tenant = _resolve_tenant(auth, x_tenant_id)
+
+    query = db.query(UploadSession).filter(UploadSession.session_id == session_id)
+    if target_tenant != "platform":
+        query = query.filter(UploadSession.tenant_id == target_tenant)
+
+    session = query.first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    # Best-effort disk cleanup for all files in this session.
+    for f in session.files:
+        try:
+            if os.path.exists(f.stored_path):
+                os.remove(f.stored_path)
+        except OSError as exc:
+            logger.warning("[upload] Could not delete session file from disk: %s", exc)
+
+    old_val = jsonable_encoder(_session_read(session))
+    db.delete(session)
+
+    try:
+        with db.begin_nested():
+            log_action(
+                db,
+                tenant_id=uuid.UUID(str(target_tenant)) if target_tenant != "platform" else None,
+                entity_name="UploadSession",
+                entity_id=session_id,
+                operation_type="DELETE",
+                old_value=old_val,
+                performed_by=auth.username,
+                source_ip=request.client.host if request.client else None,
+                autocommit=False,
+            )
+            db.flush()
+    except Exception as e:
+        logger.error("Failed to write audit log for UploadSession delete: %s", e)
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error("Failed to commit UploadSession delete: %s", e)
+        raise HTTPException(status_code=500, detail="Could not delete session.") from e
+
+    return ok(message="Session removed.")
+
+
+# ---------------------------------------------------------------------------
+# 5. Upload files into a session
 # ---------------------------------------------------------------------------
 
 @router.post(
@@ -466,7 +529,7 @@ async def upload_files_to_session(
 
 
 # ---------------------------------------------------------------------------
-# 5. Delete a file from a session
+# 6. Delete a file from a session
 # ---------------------------------------------------------------------------
 
 @router.delete(

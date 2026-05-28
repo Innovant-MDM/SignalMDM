@@ -93,6 +93,15 @@ export const uploadSessionService = {
     return res.data;
   },
 
+  /** Delete a session and all files within it. */
+  async deleteSession(sessionId: string, tenantId?: string): Promise<void> {
+    const headers = tenantId ? { 'X-Tenant-ID': tenantId } : undefined;
+    const res = await api.delete<null>(`/uploads/sessions/${sessionId}`, headers);
+    if (!res.success) {
+      throw new ApiError(res.message || 'Failed to delete session', 400, res.errors ?? []);
+    }
+  },
+
   /**
    * Upload multiple files into a session.
    * `entries` — array of { file: File, label: string } pairs.

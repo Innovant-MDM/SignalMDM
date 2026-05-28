@@ -405,12 +405,15 @@ class RawService:
             return [], total
 
         raw_ids = [r[0].raw_record_id for r in rows]
-        staging_list = (
-            db.query(StagingEntity)
+        # NOTE:
+        # Some tenant environments may not have all Phase 2 columns migrated yet.
+        # Query only the stable FK key to avoid selecting optional Phase 2 columns.
+        staging_raw_id_rows = (
+            db.query(StagingEntity.raw_record_id)
             .filter(StagingEntity.raw_record_id.in_(raw_ids))
             .all()
         )
-        staging_by_raw = {s.raw_record_id: s for s in staging_list}
+        staging_raw_ids = {row[0] for row in staging_raw_id_rows}
 
         # Tenant name lookup (for platform-admin row chips)
         page_tenant_ids = {r[0].tenant_id for r in rows}
@@ -464,9 +467,8 @@ class RawService:
 
         out: list[dict[str, Any]] = []
         for rr, src, run in rows:
-            st = staging_by_raw.get(rr.raw_record_id)
-            has_staging = st is not None
-            mapped = st.mapped_entity_type if st else None
+            has_staging = rr.raw_record_id in staging_raw_ids
+            mapped = None
             run_meta = parse_run_metadata(run.triggered_by)
             ingestion_entity = run_meta.get("entity_type")
             hint = mapped or ingestion_entity or self._entity_hint_from_source(src)

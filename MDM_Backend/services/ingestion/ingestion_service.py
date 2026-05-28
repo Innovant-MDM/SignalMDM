@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy import delete, func
 from sqlalchemy.orm import Session
 
 from db.models.ingestion_run  import IngestionRun
@@ -484,9 +485,10 @@ class IngestionService:
                 .count()
             )
             stg_n = (
-                db.query(StagingEntity)
+                db.query(func.count(StagingEntity.staging_id))
                 .filter(StagingEntity.run_id == run.run_id)
-                .count()
+                .scalar()
+                or 0
             )
             meta = parse_run_metadata(run.triggered_by)
             aligned = raw_n == stg_n
@@ -778,7 +780,13 @@ class IngestionService:
         }
         tenant_for_audit = self._parse_tenant(tenant_id) or run.tenant_id
 
-        db.delete(run)
+        # Backward-compatible hard deletes: avoid ORM relationship loads on
+        # StagingEntity because some environments may not yet have all Phase-2
+        # columns present.
+        db.execute(delete(StagingEntity).where(StagingEntity.run_id == run_id))
+        db.execute(delete(RawRecord).where(RawRecord.run_id == run_id))
+        db.execute(delete(FileUpload).where(FileUpload.run_id == run_id))
+        db.execute(delete(IngestionRun).where(IngestionRun.run_id == run_id))
         db.flush()
 
         audit_svc.log_action(

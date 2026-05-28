@@ -277,6 +277,7 @@ For detailed guides, please refer to the specialized documentation files:
 *   [DATABASE_REFERENCE.md](DATABASE_REFERENCE.md): PostgreSQL schema catalogs, multi-tenant restrictions, and audit structures.
 *   [DEPLOYMENT.md](DEPLOYMENT.md): Kubernetes deployment matrices, Dockerfiles, and incident runbooks.
 *   [TECHNICAL_REFERENCE.md](TECHNICAL_REFERENCE.md): Deep-dive reference guides for third-party libraries.
+*   [frontEnd_instructions_phase2.md](frontEnd_instructions_phase2.md): Frontend team developer guide detailing service paths, layout registrations, and UI screen integration instructions.
 
 ---
 
@@ -285,9 +286,65 @@ For detailed guides, please refer to the specialized documentation files:
 ### 8.1 Current Limitations
 *   **Permissive CSP in Dev:** The Vite HMR model requires `'unsafe-inline'` and `'unsafe-eval'` policies inside Helmet, which are disabled only during standard client-build compilations.
 *   **No Centralized Storage abstraction:** File chunks are stored directly in the local file system. Production setups require a custom S3/Cloud Storage object driver.
-*   **Mock Dashboard Telemetry:** The main analytical charts on the layout interface populate simulated telemetry counts, with real data hook integration scheduled for Phase 2.
+*   **Mock Dashboard Telemetry:** The main analytical charts on the layout interface populate simulated telemetry counts, with real data hook integration scheduled for Phase 3.
 
 ### 8.2 Roadmap
-1.  **Phase 2 Entity Resolution:** Integration of probabilistic matching models, Jaro-Winkler/Levenshtein algorithms, and graph matching schemas.
+1.  **Phase 3 Entity Resolution:** Integration of probabilistic matching models, Jaro-Winkler/Levenshtein algorithms, and graph matching schemas.
 2.  **Machine Learning Scoring Engine:** Integrate advanced scoring modules (`scoring.py`, `features.py`) to run anomaly detection models on raw inputs.
 3.  **Real-Time Distributed Ingestion:** Deploy Apache Kafka event ingestion queues to stream live signal changes.
+
+---
+
+## 9. Phase 2: Mapping & Standardization
+
+Phase 2 introduces the core multi-tenant mapping, transformation, standardization, and asynchronous normalization run architecture.
+
+### 9.1 Database Preparation
+Four SQL migration and seed scripts are provided at the root of the workspace to initialize Phase 2. Run them in the following order:
+1.  **Schema Migration**: Adds Canonical Fields, Rules, Field Mappings, Normalization Runs, Mapping Errors, and updates `staging_entities`.
+    ```bash
+    psql -U postgres -d SignalMDM -f "d:\SignalMDM\db_phase2_migration.sql"
+    ```
+2.  **Canonical Models Seed**: Seeds standard multi-tenant target fields.
+    ```bash
+    psql -U postgres -d SignalMDM -f "d:\SignalMDM\db_phase2_seed.sql"
+    ```
+3.  **Rules Catalog Seed**: Seeds standard data cleanup, transformation, and translation rules.
+    ```bash
+    psql -U postgres -d SignalMDM -f "d:\SignalMDM\db_phase2_seed_rules.sql"
+    ```
+4.  **RBAC Permissions Seed**: Seeds 13 screen-level permissions and connects them to default platform roles. (Note: These are also auto-seeded on backend startup).
+    ```bash
+    psql -U postgres -d SignalMDM -f "d:\SignalMDM\db_phase2_rbac_seed.sql"
+    ```
+
+### 9.2 File Structure Guide
+
+#### Backend (MDM_Backend)
+*   **Database Models**: `db/models/mdm_phase2/`
+    *   [canonical_field.py](file:///d:/SignalMDM/MDM_Backend/db/models/mdm_phase2/canonical_field.py) — Defines `CanonicalField`
+    *   [transformation_rule.py](file:///d:/SignalMDM/MDM_Backend/db/models/mdm_phase2/transformation_rule.py) — Defines `TransformationRule`
+    *   [standardization_rule.py](file:///d:/SignalMDM/MDM_Backend/db/models/mdm_phase2/standardization_rule.py) — Defines `StandardizationRule`
+    *   [field_mapping.py](file:///d:/SignalMDM/MDM_Backend/db/models/mdm_phase2/field_mapping.py) — Defines `FieldMapping`
+    *   [normalization_run.py](file:///d:/SignalMDM/MDM_Backend/db/models/mdm_phase2/normalization_run.py) — Defines `NormalizationRun`
+    *   [mapping_error.py](file:///d:/SignalMDM/MDM_Backend/db/models/mdm_phase2/mapping_error.py) — Defines `MappingError`
+*   **Validation Schemas**: `schemas/mdm_phase2/` (Pydantic models)
+*   **Business Logic Layer**: `services/mdm_phase2/`
+    *   `canonical_service.py`, `rule_service.py`, `mapping_service.py`, `normalization_service.py`, `retry_service.py`
+*   **API Routers**: `api/routes/mdm_phase2/` (registered in `main.py`)
+*   **Processing Utilities**: `utils/mdm_phase2/`
+    *   `transformers.py` (Trim, Upper, Regex, Date Formats)
+    *   `standardizers.py` (Domain translates)
+    *   `validators.py` (Pydantic / Type validations)
+*   **Celery Background Task**: `workers/mdm_phase2/normalization_worker.py` (runs asynchronous validation rules)
+
+#### Frontend (MDM_Frontend)
+*   **API Client Services**: `src/services/mdm_phase2/`
+    *   [canonicalService.ts](file:///d:/SignalMDM/MDM_Frontend/src/services/mdm_phase2/canonicalService.ts) (Canonical Fields)
+    *   [mappingService.ts](file:///d:/SignalMDM/MDM_Frontend/src/services/mdm_phase2/mappingService.ts) (Mappings)
+    *   [ruleService.ts](file:///d:/SignalMDM/MDM_Frontend/src/services/mdm_phase2/ruleService.ts) (Rules)
+    *   [normalizationService.ts](file:///d:/SignalMDM/MDM_Frontend/src/services/mdm_phase2/normalizationService.ts) (Runs, Errors, Retries)
+*   **Skeleton Pages**: `src/pages/mdm_phase2/` (includes comments pointing to service API files)
+    *   `CanonicalModelsPage.tsx`, `FieldMappingsPage.tsx`, `TransformationRulesPage.tsx`, `StandardizationRulesPage.tsx`, `NormalizationRunsPage.tsx`, `NormalizedRecordsPage.tsx`, `MappingErrorsPage.tsx`
+*   **External CSS Files**: `src/styles/mdm_phase2/`
+    *   `CanonicalModelsPage.css`, `FieldMappingsPage.css`, `TransformationRulesPage.css`, `StandardizationRulesPage.css`, `NormalizationRunsPage.css`, `NormalizedRecordsPage.css`, `MappingErrorsPage.css`

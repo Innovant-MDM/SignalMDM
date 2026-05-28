@@ -1,0 +1,60 @@
+.mdm-rules-page { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.mdm-rules-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.mdm-rules-header h1 { margin: 0; font-size: 24px; }
+.mdm-rules-header p { margin: 4px 0 0; color: var(--text-secondary); font-size: 13px; }
+.mdm-rules-tenant { font-size: 12px; background: var(--blue-100); color: var(--blue-700); padding: 6px 10px; border-radius: 999px; }
+.mdm-rules-toolbar { display: grid; grid-template-columns: 1fr 160px 180px auto auto; gap: 10px; }
+.mdm-rules-card { background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: 10px; padding: 14px; }
+.mdm-rules-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; }
+.mdm-rules-form, .mdm-kv-list { display: flex; flex-direction: column; gap: 8px; }
+.mdm-rules-input, .mdm-rules-select, .mdm-rules-json {
+  width: 100%; border: 1px solid var(--border-muted); border-radius: 8px; padding: 9px 10px; background: var(--bg-surface); color: var(--text-primary);
+}
+.mdm-rules-json { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.mdm-rules-btn { border: 0; border-radius: 8px; padding: 8px 12px; background: var(--blue-600); color: #fff; cursor: pointer; }
+.mdm-rules-btn:disabled { opacity: .6; cursor: not-allowed; }
+.mdm-rules-btn-secondary { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-light); }
+.mdm-rules-table-wrap { overflow: auto; max-height: 420px; }
+.mdm-rules-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mdm-rules-table th, .mdm-rules-table td { border-bottom: 1px solid var(--border-light); text-align: left; padding: 8px; }
+.mdm-rules-table tr.active { background: var(--blue-100); }
+.mdm-link-btn { border: none; background: none; color: var(--blue-600); cursor: pointer; margin-right: 6px; }
+.mdm-badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.mdm-badge.ok { background: var(--green-100); color: var(--green-700); }
+.mdm-badge.muted { background: var(--gray-100); color: var(--gray-600); }
+.mdm-rules-error { color: var(--red-600); font-size: 12px; }
+.mdm-kv-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
+.mdm-rules-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.mdm-rules-pre { margin: 0; padding: 12px; border-radius: 8px; background: var(--bg-elevated); border: 1px solid var(--border-light); overflow: auto; font-size: 12px; }
+
+@media (max-width: 1100px) {
+  .mdm-rules-toolbar { grid-template-columns: 1fr 1fr; }
+  .mdm-rules-grid { grid-template-columns: 1fr; }
+}
+
+
+.mdm-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 1000; }
+.mdm-modal-card { width: min(1000px, 96vw); max-height: 90vh; overflow: auto; background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: 12px; padding: 14px; }
+.mdm-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.mdm-modal-header h3 { margin: 0; }
+.mdm-modal-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
+.mdm-modal-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mdm-changed-keys { display: flex; flex-wrap: wrap; gap: 6px; }
+.mdm-diff-table code { white-space: pre-wrap; word-break: break-word; font-size: 11px; }
+.mdm-diff-filters { display: flex; gap: 8px; margin-bottom: 8px; }
+.mdm-diff-filter-btn {
+  border: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.mdm-diff-filter-btn.active { background: var(--blue-100); color: var(--blue-700); border-color: var(--blue-200); }
+.mdm-diff-val { display: inline-block; max-height: 42px; overflow: hidden; }
+.mdm-diff-val.expanded { max-height: none; }
+.mdm-diff-row--added td { background: rgba(16, 185, 129, 0.08); }
+.mdm-diff-row--removed td { background: rgba(239, 68, 68, 0.08); }
+.mdm-diff-row--changed td { background: rgba(245, 158, 11, 0.08); }
+@media (max-width: 900px) { .mdm-modal-diff { grid-template-columns: 1fr; } }

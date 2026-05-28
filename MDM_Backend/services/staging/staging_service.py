@@ -26,7 +26,7 @@ import logging
 import uuid
 from typing import Any, Optional, Union
 
-from sqlalchemy import String, cast, or_
+from sqlalchemy import String, cast, or_, insert, func
 from sqlalchemy.orm import Session
 
 from db.models.raw_record import RawRecord
@@ -132,7 +132,7 @@ class StagingService:
             if not raw_batch:
                 break
 
-            staging_batch: list[StagingEntity] = []
+            staging_batch: list[dict[str, Any]] = []
             for raw in raw_batch:
                 # Idempotency: skip already staged
                 if raw.raw_record_id in already_staged_ids:
@@ -166,20 +166,22 @@ class StagingService:
                     )
 
                 staging_batch.append(
-                    StagingEntity(
-                        staging_id=uuid.uuid4(),
-                        tenant_id=tenant_id,
-                        run_id=run_id,
-                        raw_record_id=raw.raw_record_id,
-                        source_system_id=source_system_id,
-                        entity_data=raw.raw_data,   # verbatim copy in Phase 1
-                        mapped_entity_type=entity_type,
-                        state=StagingStateEnum.READY_FOR_MAPPING,
-                    )
+                    {
+                        "staging_id": uuid.uuid4(),
+                        "tenant_id": tenant_id,
+                        "run_id": run_id,
+                        "raw_record_id": raw.raw_record_id,
+                        "source_system_id": source_system_id,
+                        "entity_data": raw.raw_data,  # verbatim copy in Phase 1
+                        "mapped_entity_type": entity_type,
+                        "state": StagingStateEnum.READY_FOR_MAPPING,
+                    }
                 )
 
             if staging_batch:
-                db.bulk_save_objects(staging_batch)
+                # Insert only Phase-1-safe columns so older DBs without Phase-2
+                # columns (e.g. normalization_* fields) still work.
+                db.execute(insert(StagingEntity.__table__), staging_batch)
                 db.commit()
                 total_created += len(staging_batch)
 
@@ -201,13 +203,16 @@ class StagingService:
         tenant_id: uuid.UUID,
     ) -> int:
         """Return the number of staging entities created for this run."""
+        # Count only by primary key column. Querying the full ORM entity can
+        # attempt to reference newer optional columns not present in older DBs.
         return (
-            db.query(StagingEntity)
+            db.query(func.count(StagingEntity.staging_id))
             .filter(
                 StagingEntity.run_id == run_id,
                 StagingEntity.tenant_id == tenant_id,
             )
-            .count()
+            .scalar()
+            or 0
         )
 
     # ------------------------------------------------------------------
@@ -289,7 +294,26 @@ class StagingService:
 
         tid = self._parse_tenant_id(tenant_id)
         q = (
-            db.query(StagingEntity, SourceSystem, RawRecord, IngestionRun)
+            db.query(
+                StagingEntity.staging_id,
+                StagingEntity.tenant_id,
+                StagingEntity.run_id,
+                StagingEntity.raw_record_id,
+                StagingEntity.source_system_id,
+                StagingEntity.entity_data,
+                StagingEntity.state,
+                StagingEntity.mapped_entity_type,
+                StagingEntity.created_at,
+                SourceSystem.source_name,
+                RawRecord.tenant_id,
+                RawRecord.source_system_id,
+                RawRecord.row_index,
+                RawRecord.raw_data,
+                RawRecord.checksum_md5,
+                RawRecord.run_id,
+                IngestionRun.state,
+                IngestionRun.triggered_by,
+            )
             .join(SourceSystem, SourceSystem.source_system_id == StagingEntity.source_system_id)
             .join(RawRecord, RawRecord.raw_record_id == StagingEntity.raw_record_id)
             .join(IngestionRun, IngestionRun.run_id == StagingEntity.run_id)
@@ -327,7 +351,7 @@ class StagingService:
             return [], total
 
         # Tenant name lookup
-        page_tenant_ids = {st.tenant_id for st, _, _, _ in rows}
+        page_tenant_ids = {r[1] for r in rows}
         tenant_name_by_id: dict[uuid.UUID, str] = {}
         if page_tenant_ids:
             tenant_name_by_id = {
@@ -339,9 +363,9 @@ class StagingService:
 
         # Cross-run duplicate detection
         page_keys: set[tuple[uuid.UUID, str]] = {
-            (raw.tenant_id, raw.checksum_md5)
-            for _st, _src, raw, _run in rows
-            if raw.checksum_md5
+            (r[10], r[14])
+            for r in rows
+            if r[14]
         }
         originals: dict[tuple[uuid.UUID, str], RawRecord] = {}
         if page_keys:
@@ -387,20 +411,42 @@ class StagingService:
                 staging_by_original_raw[s.raw_record_id] = s
 
         out: list[dict[str, Any]] = []
-        for st, src, raw, run in rows:
-            run_meta = parse_run_metadata(run.triggered_by)
+        for row in rows:
+            st_staging_id = row[0]
+            st_tenant_id = row[1]
+            st_run_id = row[2]
+            st_raw_record_id = row[3]
+            st_source_system_id = row[4]
+            st_entity_data = row[5]
+            st_state = row[6]
+            st_mapped_entity_type = row[7]
+            st_created_at = row[8]
+
+            source_name = row[9]
+
+            raw_tenant_id = row[10]
+            raw_source_system_id = row[11]
+            raw_row_index = row[12]
+            raw_data = row[13]
+            raw_checksum_md5 = row[14]
+            raw_run_id = row[15]
+
+            run_state = row[16]
+            run_triggered_by = row[17]
+
+            run_meta = parse_run_metadata(run_triggered_by)
             ingestion_entity = run_meta.get("entity_type")
             hint = (
-                st.mapped_entity_type
+                st_mapped_entity_type
                 or ingestion_entity
-                or self._entity_hint_from_source(src)
+                or "RECORD"
             )
-            src_id    = self._derive_source_record_id(raw.raw_data, raw.row_index)
-            dq        = self._dq_score_placeholder(st.entity_data)
-            state_val = st.state.value if isinstance(st.state, StagingStateEnum) else str(st.state)
+            src_id = self._derive_source_record_id(raw_data, raw_row_index)
+            dq = self._dq_score_placeholder(st_entity_data)
+            state_val = st_state.value if isinstance(st_state, StagingStateEnum) else str(st_state)
 
-            origin = originals.get((raw.tenant_id, raw.checksum_md5))
-            is_dup = bool(origin) and origin.raw_record_id != raw.raw_record_id
+            origin = originals.get((raw_tenant_id, raw_checksum_md5))
+            is_dup = bool(origin) and origin.raw_record_id != st_raw_record_id
             dup_scope: Optional[str] = None
             dup_of_raw: Optional[uuid.UUID] = None
             dup_of_run: Optional[uuid.UUID] = None
@@ -408,7 +454,7 @@ class StagingService:
             first_seen_by: Optional[str] = None
             first_seen_at = None
             if is_dup and origin is not None:
-                dup_scope     = "CROSS_RUN" if origin.run_id != raw.run_id else "WITHIN_RUN"
+                dup_scope     = "CROSS_RUN" if origin.run_id != raw_run_id else "WITHIN_RUN"
                 dup_of_raw    = origin.raw_record_id
                 dup_of_run    = origin.run_id
                 origin_st     = staging_by_original_raw.get(origin.raw_record_id)
@@ -418,7 +464,7 @@ class StagingService:
                 first_seen_at = meta.get("created_at") or origin.created_at
 
             # Missing-value flag for this staging row
-            entity_data = st.entity_data or {}
+            entity_data = st_entity_data or {}
             has_missing_values = any(
                 v is None or (isinstance(v, str) and v.strip().lower() in _NULL_LIKE)
                 for v in entity_data.values()
@@ -426,36 +472,36 @@ class StagingService:
 
             # Invalid reference check: staging source_system_id must match raw record's
             has_invalid_reference = (
-                st.source_system_id != raw.source_system_id
+                st_source_system_id != raw_source_system_id
             )
             if has_invalid_reference:
                 logger.warning(
                     "[staging_service] Inconsistent source_system_id: staging=%s raw=%s "
                     "on staging_id=%s.",
-                    st.source_system_id, raw.source_system_id, st.staging_id,
+                    st_source_system_id, raw_source_system_id, st_staging_id,
                 )
 
             out.append(
                 {
-                    "staging_id":                  st.staging_id,
-                    "tenant_id":                   st.tenant_id,
-                    "tenant_name":                 tenant_name_by_id.get(st.tenant_id),
-                    "run_id":                      st.run_id,
-                    "raw_record_id":               st.raw_record_id,
-                    "source_system_id":            st.source_system_id,
-                    "source_name":                 src.source_name,
+                    "staging_id":                  st_staging_id,
+                    "tenant_id":                   st_tenant_id,
+                    "tenant_name":                 tenant_name_by_id.get(st_tenant_id),
+                    "run_id":                      st_run_id,
+                    "raw_record_id":               st_raw_record_id,
+                    "source_system_id":            st_source_system_id,
+                    "source_name":                 source_name,
                     "state":                       state_val,
-                    "mapped_entity_type":          st.mapped_entity_type,
+                    "mapped_entity_type":          st_mapped_entity_type,
                     "ingestion_entity_type":       ingestion_entity,
                     "entity_display":              hint,
                     "run_type":                    run_meta.get("run_type"),
-                    "entity_data":                 st.entity_data,
-                    "raw_data":                    raw.raw_data,
-                    "created_at":                  st.created_at,
-                    "ingestion_run_state":         str(run.state),
+                    "entity_data":                 st_entity_data,
+                    "raw_data":                    raw_data,
+                    "created_at":                  st_created_at,
+                    "ingestion_run_state":         str(run_state),
                     "source_record_id":            src_id,
                     "dq_score":                    dq,
-                    "validation_status":           self._validation_status(st.state),
+                    "validation_status":           self._validation_status(st_state),
                     "has_missing_values":          has_missing_values,
                     "has_invalid_reference":       has_invalid_reference,
                     "is_duplicate":                is_dup,
