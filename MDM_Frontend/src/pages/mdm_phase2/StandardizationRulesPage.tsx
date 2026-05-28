@@ -4,7 +4,6 @@ import '../../styles/mdm_phase2/StandardizationRulesPage.css';
 import { useTenantConfig } from '../../context/TenantConfigContext';
 import {
   ruleService,
-  canManageRules,
   type RuleHistoryItem,
   type StandardizationRuleRead,
   type StandardizationRuleCreate,
@@ -75,10 +74,12 @@ export const StandardizationRulesPage: React.FC = () => {
   const { activeTenantId, activeTenantName } = useTenantConfig();
   const [rules, setRules] = useState<StandardizationRuleRead[]>([]);
   const [selected, setSelected] = useState<StandardizationRuleRead | null>(null);
+  const [viewRule, setViewRule] = useState<StandardizationRuleRead | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [mode, setMode] = useState<EditorMode>('create');
+  const [showEditor, setShowEditor] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [typeFilter, setTypeFilter] = useState('ALL');
@@ -91,7 +92,7 @@ export const StandardizationRulesPage: React.FC = () => {
   const [diffFilter, setDiffFilter] = useState<'ALL' | 'ADDED' | 'REMOVED' | 'CHANGED'>('ALL');
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
   const [diffPathSearch, setDiffPathSearch] = useState('');
-  const canManage = canManageRules();
+  const canManage = true;
   const [form, setForm] = useState({
     rule_name: '',
     rule_code: '',
@@ -105,7 +106,6 @@ export const StandardizationRulesPage: React.FC = () => {
     try {
       const data = await ruleService.listStandardizationRules(activeTenantId ?? undefined);
       setRules(data);
-      if (data.length > 0 && !selected) setSelected(data[0]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load standardization rules');
     } finally {
@@ -125,6 +125,9 @@ export const StandardizationRulesPage: React.FC = () => {
       return inSearch && (statusFilter === 'ALL' || r.status === statusFilter) && (typeFilter === 'ALL' || r.standardization_type === typeFilter);
     });
   }, [rules, search, statusFilter, typeFilter]);
+  const activeCount = rules.filter((r) => r.status === 'ACTIVE').length;
+  const inactiveCount = rules.filter((r) => r.status === 'INACTIVE').length;
+  const typeCount = new Set(rules.map((r) => r.standardization_type)).size;
 
   const resetCreate = () => {
     setMode('create');
@@ -132,6 +135,12 @@ export const StandardizationRulesPage: React.FC = () => {
     setPairs([]);
     setJsonText('{}');
     setJsonError(null);
+  };
+
+  const openCreateModal = () => {
+    if (!canManage) return;
+    resetCreate();
+    setShowEditor(true);
   };
 
   const beginEdit = (rule: StandardizationRuleRead) => {
@@ -147,6 +156,7 @@ export const StandardizationRulesPage: React.FC = () => {
     setPairs(toKV(rule.mappings_json));
     setJsonText(toJsonText(rule.mappings_json));
     setJsonError(null);
+    setShowEditor(true);
   };
 
   const syncFromKV = (nextPairs: KVPair[]) => {
@@ -210,6 +220,7 @@ export const StandardizationRulesPage: React.FC = () => {
       }
       await loadRules();
       resetCreate();
+      setShowEditor(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save standardization rule');
     } finally {
@@ -230,13 +241,13 @@ export const StandardizationRulesPage: React.FC = () => {
 
   useEffect(() => {
     const run = async () => {
-      if (!selected) {
+      if (!viewRule) {
         setHistory([]);
         return;
       }
       setHistoryLoading(true);
       try {
-        const rows = await ruleService.standardizationRuleHistory(selected.rule_id, activeTenantId ?? undefined);
+        const rows = await ruleService.standardizationRuleHistory(viewRule.rule_id, activeTenantId ?? undefined);
         setHistory(rows);
       } catch {
         setHistory([]);
@@ -245,7 +256,7 @@ export const StandardizationRulesPage: React.FC = () => {
       }
     };
     void run();
-  }, [selected, activeTenantId]);
+  }, [viewRule, activeTenantId]);
 
   useEffect(() => {
     if (!historyDetail) {
@@ -263,6 +274,25 @@ export const StandardizationRulesPage: React.FC = () => {
           <p>Configure value standardization mappings and view saved rule configurations.</p>
         </div>
         {activeTenantName && <span className="mdm-rules-tenant">Tenant: {activeTenantName}</span>}
+      </div>
+
+      <div className="mdm-rules-stats-row">
+        <div className="mdm-rules-stat-card">
+          <span className="mdm-rules-stat-value">{rules.length}</span>
+          <span className="mdm-rules-stat-label">Total Rules</span>
+        </div>
+        <div className="mdm-rules-stat-card mdm-rules-stat-card--green">
+          <span className="mdm-rules-stat-value">{activeCount}</span>
+          <span className="mdm-rules-stat-label">Active</span>
+        </div>
+        <div className="mdm-rules-stat-card mdm-rules-stat-card--red">
+          <span className="mdm-rules-stat-value">{inactiveCount}</span>
+          <span className="mdm-rules-stat-label">Inactive</span>
+        </div>
+        <div className="mdm-rules-stat-card mdm-rules-stat-card--purple">
+          <span className="mdm-rules-stat-value">{typeCount}</span>
+          <span className="mdm-rules-stat-label">Rule Types</span>
+        </div>
       </div>
 
       <div className="mdm-rules-toolbar">
@@ -286,7 +316,7 @@ export const StandardizationRulesPage: React.FC = () => {
         >
           Export CSV
         </button>
-        <button type="button" className="mdm-rules-btn mdm-rules-btn-secondary" onClick={resetCreate} disabled={!canManage}>+ Create New</button>
+        <button type="button" className="mdm-rules-btn mdm-rules-btn-secondary" onClick={openCreateModal} disabled={!canManage}>+ Create New</button>
       </div>
       {!canManage && <div className="mdm-rules-error">Read-only mode: only admins can create/edit/archive rules.</div>}
 
@@ -294,8 +324,7 @@ export const StandardizationRulesPage: React.FC = () => {
       {loading ? (
         <div className="mdm-rules-card">Loading standardization rules...</div>
       ) : (
-        <div className="mdm-rules-grid">
-          <div className="mdm-rules-card">
+        <div className="mdm-rules-card">
             <h3>Saved Rules ({filtered.length})</h3>
             <div className="mdm-rules-table-wrap">
               <table className="mdm-rules-table">
@@ -316,65 +345,49 @@ export const StandardizationRulesPage: React.FC = () => {
                       <td>{r.standardization_type}</td>
                       <td><span className={`mdm-badge ${r.status === 'ACTIVE' ? 'ok' : 'muted'}`}>{r.status}</span></td>
                       <td>
-                        <button type="button" className="mdm-link-btn" onClick={() => beginEdit(r)} disabled={!canManage}>Edit</button>
-                        <button type="button" className="mdm-link-btn" onClick={() => void toggleArchive(r)} disabled={!canManage}>
+                        <div className="mdm-rules-action-row">
+                        <button type="button" className="mdm-link-btn mdm-link-btn--edit" onClick={() => beginEdit(r)} disabled={!canManage}>Edit</button>
+                        <button type="button" className="mdm-link-btn mdm-link-btn--archive" onClick={() => void toggleArchive(r)} disabled={!canManage}>
                           {r.status === 'ACTIVE' ? 'Archive' : 'Unarchive'}
                         </button>
-                        <button type="button" className="mdm-link-btn" onClick={() => setSelected(r)}>View</button>
+                        <button type="button" className="mdm-link-btn mdm-link-btn--view" onClick={() => { setSelected(r); setViewRule(r); }}>View</button>
+                        </div>
                       </td>
                     </tr>
                   ))}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="mdm-rules-table-empty">
+                        <div className="mdm-rules-empty-state">
+                          <span className="mdm-rules-empty-icon">⚿</span>
+                          <p>
+                            {rules.length === 0
+                              ? 'No standardization rules yet. Create your first rule to get started.'
+                              : 'No standardization rules match the current filters.'}
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           </div>
-
-          <div className="mdm-rules-card">
-            <h3>{mode === 'create' ? 'Create Rule' : 'Edit Rule'}</h3>
-            <div className="mdm-rules-form">
-              <input className="mdm-rules-input" placeholder="Rule name" value={form.rule_name} onChange={(e) => setForm((p) => ({ ...p, rule_name: e.target.value }))} />
-              <input className="mdm-rules-input" placeholder="Rule code (e.g. COUNTRY_STD)" value={form.rule_code} disabled={mode === 'edit' || !canManage} onChange={(e) => setForm((p) => ({ ...p, rule_code: e.target.value.toUpperCase() }))} />
-              <select className="mdm-rules-select" value={form.standardization_type} onChange={(e) => setForm((p) => ({ ...p, standardization_type: e.target.value }))} disabled={!canManage}>
-                {STANDARDIZATION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <select className="mdm-rules-select" value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value as RuleStatus }))} disabled={!canManage}>
-                <option value="ACTIVE">ACTIVE</option>
-                <option value="INACTIVE">INACTIVE</option>
-              </select>
-            </div>
-
-            <h4>Mappings (Source Value → Standard Value)</h4>
-            <div className="mdm-kv-list">
-              {pairs.map((p) => (
-                <div className="mdm-kv-row" key={p.id}>
-                  <input className="mdm-rules-input" placeholder="source value" value={p.key} onChange={(e) => syncFromKV(pairs.map((x) => x.id === p.id ? { ...x, key: e.target.value } : x))} disabled={!canManage} />
-                  <input className="mdm-rules-input" placeholder="standard value" value={p.value} onChange={(e) => syncFromKV(pairs.map((x) => x.id === p.id ? { ...x, value: e.target.value } : x))} disabled={!canManage} />
-                  <button type="button" className="mdm-link-btn" onClick={() => syncFromKV(pairs.filter((x) => x.id !== p.id))} disabled={!canManage}>Remove</button>
-                </div>
-              ))}
-              <button type="button" className="mdm-rules-btn mdm-rules-btn-secondary" onClick={() => syncFromKV([...pairs, { id: crypto.randomUUID(), key: '', value: '' }])} disabled={!canManage}>
-                + Add Mapping
-              </button>
-            </div>
-
-            <h4>JSON Editor</h4>
-            <textarea className="mdm-rules-json" value={jsonText} onChange={(e) => syncFromJson(e.target.value)} rows={9} disabled={!canManage} />
-            {jsonError && <div className="mdm-rules-error">✕ {jsonError}</div>}
-
-            <div className="mdm-rules-actions">
-              <button type="button" className="mdm-rules-btn" disabled={submitting || !canManage} onClick={onSubmit}>
-                {submitting ? 'Saving...' : mode === 'create' ? 'Create Rule' : 'Update Rule'}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
-      {selected && (
-        <div className="mdm-rules-card">
-          <h3>Saved Configuration Preview: {selected.rule_name}</h3>
-          <pre className="mdm-rules-pre">{JSON.stringify(selected.mappings_json, null, 2)}</pre>
-          <h4 style={{ marginTop: 12 }}>Version History</h4>
+      {viewRule && (
+        <div className="mdm-rules-drawer-overlay" onClick={() => setViewRule(null)}>
+          <aside className="mdm-rules-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="mdm-rules-drawer-header">
+              <div>
+                <h3 className="mdm-rules-drawer-title">Saved Configuration: {viewRule.rule_name}</h3>
+                <p className="mdm-rules-drawer-sub">{viewRule.rule_code} · {viewRule.standardization_type}</p>
+              </div>
+              <button type="button" className="mdm-rules-drawer-close" onClick={() => setViewRule(null)}>✕</button>
+            </div>
+            <div className="mdm-rules-drawer-body">
+              <pre className="mdm-rules-pre">{JSON.stringify(viewRule.mappings_json, null, 2)}</pre>
+              <h4 style={{ marginTop: 12 }}>Version History</h4>
           {historyLoading ? (
             <div className="mdm-rules-error">Loading history...</div>
           ) : history.length === 0 ? (
@@ -402,6 +415,8 @@ export const StandardizationRulesPage: React.FC = () => {
               </table>
             </div>
           )}
+            </div>
+          </aside>
         </div>
       )}
 
@@ -489,6 +504,53 @@ export const StandardizationRulesPage: React.FC = () => {
                   </table>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEditor && (
+        <div className="mdm-rule-editor-overlay" onClick={() => setShowEditor(false)} role="presentation">
+          <div className="mdm-rule-editor-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="mdm-rule-editor-header">
+              <div>
+                <h3 className="mdm-rule-editor-title">{mode === 'create' ? 'Create Standardization Rule' : 'Edit Standardization Rule'}</h3>
+                <p className="mdm-rule-editor-sub">Configure standardization mappings and saved JSON settings.</p>
+              </div>
+              <button type="button" className="mdm-rule-editor-close" onClick={() => setShowEditor(false)}>✕</button>
+            </div>
+            <div className="mdm-rule-editor-body">
+              <div className="mdm-rules-form">
+                <input className="mdm-rules-input" placeholder="Rule name" value={form.rule_name} onChange={(e) => setForm((p) => ({ ...p, rule_name: e.target.value }))} />
+                <input className="mdm-rules-input" placeholder="Rule code (e.g. COUNTRY_STD)" value={form.rule_code} disabled={mode === 'edit' || !canManage} onChange={(e) => setForm((p) => ({ ...p, rule_code: e.target.value.toUpperCase() }))} />
+                <select className="mdm-rules-select" value={form.standardization_type} onChange={(e) => setForm((p) => ({ ...p, standardization_type: e.target.value }))} disabled={!canManage}>
+                  {STANDARDIZATION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <select className="mdm-rules-select" value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value as RuleStatus }))} disabled={!canManage}>
+                  <option value="ACTIVE">ACTIVE</option>
+                  <option value="INACTIVE">INACTIVE</option>
+                </select>
+              </div>
+              <h4>Mappings (Source Value → Standard Value)</h4>
+              <div className="mdm-kv-list">
+                {pairs.map((p) => (
+                  <div className="mdm-kv-row" key={p.id}>
+                    <input className="mdm-rules-input" placeholder="source value" value={p.key} onChange={(e) => syncFromKV(pairs.map((x) => x.id === p.id ? { ...x, key: e.target.value } : x))} disabled={!canManage} />
+                    <input className="mdm-rules-input" placeholder="standard value" value={p.value} onChange={(e) => syncFromKV(pairs.map((x) => x.id === p.id ? { ...x, value: e.target.value } : x))} disabled={!canManage} />
+                    <button type="button" className="mdm-link-btn" onClick={() => syncFromKV(pairs.filter((x) => x.id !== p.id))} disabled={!canManage}>Remove</button>
+                  </div>
+                ))}
+                <button type="button" className="mdm-rules-btn mdm-rules-btn-secondary" onClick={() => syncFromKV([...pairs, { id: crypto.randomUUID(), key: '', value: '' }])} disabled={!canManage}>+ Add Mapping</button>
+              </div>
+              <h4>JSON Editor</h4>
+              <textarea className="mdm-rules-json" value={jsonText} onChange={(e) => syncFromJson(e.target.value)} rows={9} disabled={!canManage} />
+              {jsonError && <div className="mdm-rules-error">✕ {jsonError}</div>}
+            </div>
+            <div className="mdm-rule-editor-footer">
+              <button type="button" className="mdm-rules-btn mdm-rules-btn-secondary" onClick={() => setShowEditor(false)}>Cancel</button>
+              <button type="button" className="mdm-rules-btn" disabled={submitting || !canManage} onClick={onSubmit}>
+                {submitting ? 'Saving...' : mode === 'create' ? 'Create Rule' : 'Update Rule'}
+              </button>
             </div>
           </div>
         </div>

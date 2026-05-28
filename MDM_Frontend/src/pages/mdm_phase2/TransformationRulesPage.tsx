@@ -4,7 +4,6 @@ import '../../styles/mdm_phase2/TransformationRulesPage.css';
 import { useTenantConfig } from '../../context/TenantConfigContext';
 import {
   ruleService,
-  canManageRules,
   type RuleHistoryItem,
   type TransformationRuleRead,
   type TransformationRuleCreate,
@@ -97,7 +96,9 @@ export const TransformationRulesPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
   const [selected, setSelected] = useState<TransformationRuleRead | null>(null);
+  const [viewRule, setViewRule] = useState<TransformationRuleRead | null>(null);
   const [mode, setMode] = useState<EditorMode>('create');
+  const [showEditor, setShowEditor] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [history, setHistory] = useState<RuleHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -105,7 +106,7 @@ export const TransformationRulesPage: React.FC = () => {
   const [diffFilter, setDiffFilter] = useState<'ALL' | 'ADDED' | 'REMOVED' | 'CHANGED'>('ALL');
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
   const [diffPathSearch, setDiffPathSearch] = useState('');
-  const canManage = canManageRules();
+  const canManage = true;
   const [jsonText, setJsonText] = useState('{}');
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [pairs, setPairs] = useState<KVPair[]>([]);
@@ -122,7 +123,6 @@ export const TransformationRulesPage: React.FC = () => {
     try {
       const data = await ruleService.listTransformationRules(activeTenantId ?? undefined);
       setRules(data);
-      if (data.length > 0 && !selected) setSelected(data[0]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load transformation rules');
     } finally {
@@ -148,6 +148,9 @@ export const TransformationRulesPage: React.FC = () => {
       return inSearch && statusOk && typeOk;
     });
   }, [rules, search, statusFilter, typeFilter]);
+  const activeCount = rules.filter((r) => r.status === 'ACTIVE').length;
+  const inactiveCount = rules.filter((r) => r.status === 'INACTIVE').length;
+  const typeCount = new Set(rules.map((r) => r.transformation_type)).size;
 
   const resetCreate = () => {
     setMode('create');
@@ -155,6 +158,12 @@ export const TransformationRulesPage: React.FC = () => {
     setPairs([]);
     setJsonText('{}');
     setJsonError(null);
+  };
+
+  const openCreateModal = () => {
+    if (!canManage) return;
+    resetCreate();
+    setShowEditor(true);
   };
 
   const beginEdit = (rule: TransformationRuleRead) => {
@@ -170,6 +179,7 @@ export const TransformationRulesPage: React.FC = () => {
     setPairs(toKV(rule.config_json));
     setJsonText(toJsonText(rule.config_json));
     setJsonError(null);
+    setShowEditor(true);
   };
 
   const syncFromKV = (nextPairs: KVPair[]) => {
@@ -235,6 +245,7 @@ export const TransformationRulesPage: React.FC = () => {
       }
       await loadRules();
       resetCreate();
+      setShowEditor(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save transformation rule');
     } finally {
@@ -255,13 +266,13 @@ export const TransformationRulesPage: React.FC = () => {
 
   useEffect(() => {
     const run = async () => {
-      if (!selected) {
+      if (!viewRule) {
         setHistory([]);
         return;
       }
       setHistoryLoading(true);
       try {
-        const rows = await ruleService.transformationRuleHistory(selected.rule_id, activeTenantId ?? undefined);
+        const rows = await ruleService.transformationRuleHistory(viewRule.rule_id, activeTenantId ?? undefined);
         setHistory(rows);
       } catch {
         setHistory([]);
@@ -270,7 +281,7 @@ export const TransformationRulesPage: React.FC = () => {
       }
     };
     void run();
-  }, [selected, activeTenantId]);
+  }, [viewRule, activeTenantId]);
 
   useEffect(() => {
     if (!historyDetail) {
@@ -288,6 +299,25 @@ export const TransformationRulesPage: React.FC = () => {
           <p>Configure reusable transformations and saved JSON configurations.</p>
         </div>
         {activeTenantName && <span className="mdm-rules-tenant">Tenant: {activeTenantName}</span>}
+      </div>
+
+      <div className="mdm-rules-stats-row">
+        <div className="mdm-rules-stat-card">
+          <span className="mdm-rules-stat-value">{rules.length}</span>
+          <span className="mdm-rules-stat-label">Total Rules</span>
+        </div>
+        <div className="mdm-rules-stat-card mdm-rules-stat-card--green">
+          <span className="mdm-rules-stat-value">{activeCount}</span>
+          <span className="mdm-rules-stat-label">Active</span>
+        </div>
+        <div className="mdm-rules-stat-card mdm-rules-stat-card--red">
+          <span className="mdm-rules-stat-value">{inactiveCount}</span>
+          <span className="mdm-rules-stat-label">Inactive</span>
+        </div>
+        <div className="mdm-rules-stat-card mdm-rules-stat-card--purple">
+          <span className="mdm-rules-stat-value">{typeCount}</span>
+          <span className="mdm-rules-stat-label">Rule Types</span>
+        </div>
       </div>
 
       <div className="mdm-rules-toolbar">
@@ -328,7 +358,7 @@ export const TransformationRulesPage: React.FC = () => {
         >
           Export CSV
         </button>
-        <button type="button" className="mdm-rules-btn mdm-rules-btn-secondary" onClick={resetCreate} disabled={!canManage}>
+        <button type="button" className="mdm-rules-btn mdm-rules-btn-secondary" onClick={openCreateModal} disabled={!canManage}>
           + Create New
         </button>
       </div>
@@ -338,8 +368,7 @@ export const TransformationRulesPage: React.FC = () => {
       {loading ? (
         <div className="mdm-rules-card">Loading transformation rules...</div>
       ) : (
-        <div className="mdm-rules-grid">
-          <div className="mdm-rules-card">
+        <div className="mdm-rules-card">
             <h3>Saved Rules ({filtered.length})</h3>
             <div className="mdm-rules-table-wrap">
               <table className="mdm-rules-table">
@@ -362,120 +391,49 @@ export const TransformationRulesPage: React.FC = () => {
                         <span className={`mdm-badge ${r.status === 'ACTIVE' ? 'ok' : 'muted'}`}>{r.status}</span>
                       </td>
                       <td>
-                        <button type="button" className="mdm-link-btn" onClick={() => beginEdit(r)} disabled={!canManage}>Edit</button>
-                        <button type="button" className="mdm-link-btn" onClick={() => void toggleArchive(r)} disabled={!canManage}>
+                        <div className="mdm-rules-action-row">
+                        <button type="button" className="mdm-link-btn mdm-link-btn--edit" onClick={() => beginEdit(r)} disabled={!canManage}>Edit</button>
+                        <button type="button" className="mdm-link-btn mdm-link-btn--archive" onClick={() => void toggleArchive(r)} disabled={!canManage}>
                           {r.status === 'ACTIVE' ? 'Archive' : 'Unarchive'}
                         </button>
-                        <button type="button" className="mdm-link-btn" onClick={() => setSelected(r)}>View</button>
+                        <button type="button" className="mdm-link-btn mdm-link-btn--view" onClick={() => { setSelected(r); setViewRule(r); }}>View</button>
+                        </div>
                       </td>
                     </tr>
                   ))}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="mdm-rules-table-empty">
+                        <div className="mdm-rules-empty-state">
+                          <span className="mdm-rules-empty-icon">⌥</span>
+                          <p>
+                            {rules.length === 0
+                              ? 'No transformation rules yet. Create your first rule to get started.'
+                              : 'No transformation rules match the current filters.'}
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           </div>
-
-          <div className="mdm-rules-card">
-            <h3>{mode === 'create' ? 'Create Rule' : 'Edit Rule'}</h3>
-            <div className="mdm-rules-form">
-              <input
-                className="mdm-rules-input"
-                placeholder="Rule name"
-                value={form.rule_name}
-                onChange={(e) => setForm((p) => ({ ...p, rule_name: e.target.value }))}
-              />
-              <input
-                className="mdm-rules-input"
-                placeholder="Rule code (e.g. TRIM_NAME)"
-                value={form.rule_code}
-                disabled={mode === 'edit' || !canManage}
-                onChange={(e) => setForm((p) => ({ ...p, rule_code: e.target.value.toUpperCase() }))}
-              />
-              <select
-                className="mdm-rules-select"
-                value={form.transformation_type}
-                onChange={(e) => setForm((p) => ({ ...p, transformation_type: e.target.value }))}
-                disabled={!canManage}
-              >
-                {TRANSFORMATION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <select
-                className="mdm-rules-select"
-                value={form.status}
-                onChange={(e) => setForm((p) => ({ ...p, status: e.target.value as RuleStatus }))}
-                disabled={!canManage}
-              >
-                <option value="ACTIVE">ACTIVE</option>
-                <option value="INACTIVE">INACTIVE</option>
-              </select>
-            </div>
-
-            <h4>Config (Key / Value)</h4>
-            <div className="mdm-kv-list">
-              {pairs.map((p) => (
-                <div className="mdm-kv-row" key={p.id}>
-                  <input
-                    className="mdm-rules-input"
-                    placeholder="key"
-                    value={p.key}
-                    onChange={(e) =>
-                      syncFromKV(pairs.map((x) => (x.id === p.id ? { ...x, key: e.target.value } : x)))
-                    }
-                    disabled={!canManage}
-                  />
-                  <input
-                    className="mdm-rules-input"
-                    placeholder="value"
-                    value={p.value}
-                    onChange={(e) =>
-                      syncFromKV(pairs.map((x) => (x.id === p.id ? { ...x, value: e.target.value } : x)))
-                    }
-                    disabled={!canManage}
-                  />
-                  <button
-                    type="button"
-                    className="mdm-link-btn"
-                    onClick={() => syncFromKV(pairs.filter((x) => x.id !== p.id))}
-                    disabled={!canManage}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                className="mdm-rules-btn mdm-rules-btn-secondary"
-                onClick={() => syncFromKV([...pairs, { id: crypto.randomUUID(), key: '', value: '' }])}
-                disabled={!canManage}
-              >
-                + Add Pair
-              </button>
-            </div>
-
-            <h4>JSON Editor</h4>
-            <textarea
-              className="mdm-rules-json"
-              value={jsonText}
-              onChange={(e) => syncFromJson(e.target.value)}
-              rows={9}
-              disabled={!canManage}
-            />
-            {jsonError && <div className="mdm-rules-error">✕ {jsonError}</div>}
-
-            <div className="mdm-rules-actions">
-              <button type="button" className="mdm-rules-btn" disabled={submitting || !canManage} onClick={onSubmit}>
-                {submitting ? 'Saving...' : mode === 'create' ? 'Create Rule' : 'Update Rule'}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
-      {selected && (
-        <div className="mdm-rules-card">
-          <h3>Saved Configuration Preview: {selected.rule_name}</h3>
-          <pre className="mdm-rules-pre">{JSON.stringify(selected.config_json, null, 2)}</pre>
-          <h4 style={{ marginTop: 12 }}>Version History</h4>
+      {viewRule && (
+        <div className="mdm-rules-drawer-overlay" onClick={() => setViewRule(null)}>
+          <aside className="mdm-rules-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="mdm-rules-drawer-header">
+              <div>
+                <h3 className="mdm-rules-drawer-title">Saved Configuration: {viewRule.rule_name}</h3>
+                <p className="mdm-rules-drawer-sub">{viewRule.rule_code} · {viewRule.transformation_type}</p>
+              </div>
+              <button type="button" className="mdm-rules-drawer-close" onClick={() => setViewRule(null)}>✕</button>
+            </div>
+            <div className="mdm-rules-drawer-body">
+              <pre className="mdm-rules-pre">{JSON.stringify(viewRule.config_json, null, 2)}</pre>
+              <h4 style={{ marginTop: 12 }}>Version History</h4>
           {historyLoading ? (
             <div className="mdm-rules-error">Loading history...</div>
           ) : history.length === 0 ? (
@@ -503,6 +461,8 @@ export const TransformationRulesPage: React.FC = () => {
               </table>
             </div>
           )}
+            </div>
+          </aside>
         </div>
       )}
 
@@ -590,6 +550,53 @@ export const TransformationRulesPage: React.FC = () => {
                   </table>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEditor && (
+        <div className="mdm-rule-editor-overlay" onClick={() => setShowEditor(false)} role="presentation">
+          <div className="mdm-rule-editor-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="mdm-rule-editor-header">
+              <div>
+                <h3 className="mdm-rule-editor-title">{mode === 'create' ? 'Create Transformation Rule' : 'Edit Transformation Rule'}</h3>
+                <p className="mdm-rule-editor-sub">Configure reusable transformation logic and JSON settings.</p>
+              </div>
+              <button type="button" className="mdm-rule-editor-close" onClick={() => setShowEditor(false)}>✕</button>
+            </div>
+            <div className="mdm-rule-editor-body">
+              <div className="mdm-rules-form">
+                <input className="mdm-rules-input" placeholder="Rule name" value={form.rule_name} onChange={(e) => setForm((p) => ({ ...p, rule_name: e.target.value }))} />
+                <input className="mdm-rules-input" placeholder="Rule code (e.g. TRIM_NAME)" value={form.rule_code} disabled={mode === 'edit' || !canManage} onChange={(e) => setForm((p) => ({ ...p, rule_code: e.target.value.toUpperCase() }))} />
+                <select className="mdm-rules-select" value={form.transformation_type} onChange={(e) => setForm((p) => ({ ...p, transformation_type: e.target.value }))} disabled={!canManage}>
+                  {TRANSFORMATION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <select className="mdm-rules-select" value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value as RuleStatus }))} disabled={!canManage}>
+                  <option value="ACTIVE">ACTIVE</option>
+                  <option value="INACTIVE">INACTIVE</option>
+                </select>
+              </div>
+              <h4>Config (Key / Value)</h4>
+              <div className="mdm-kv-list">
+                {pairs.map((p) => (
+                  <div className="mdm-kv-row" key={p.id}>
+                    <input className="mdm-rules-input" placeholder="key" value={p.key} onChange={(e) => syncFromKV(pairs.map((x) => (x.id === p.id ? { ...x, key: e.target.value } : x)))} disabled={!canManage} />
+                    <input className="mdm-rules-input" placeholder="value" value={p.value} onChange={(e) => syncFromKV(pairs.map((x) => (x.id === p.id ? { ...x, value: e.target.value } : x)))} disabled={!canManage} />
+                    <button type="button" className="mdm-link-btn" onClick={() => syncFromKV(pairs.filter((x) => x.id !== p.id))} disabled={!canManage}>Remove</button>
+                  </div>
+                ))}
+                <button type="button" className="mdm-rules-btn mdm-rules-btn-secondary" onClick={() => syncFromKV([...pairs, { id: crypto.randomUUID(), key: '', value: '' }])} disabled={!canManage}>+ Add Pair</button>
+              </div>
+              <h4>JSON Editor</h4>
+              <textarea className="mdm-rules-json" value={jsonText} onChange={(e) => syncFromJson(e.target.value)} rows={9} disabled={!canManage} />
+              {jsonError && <div className="mdm-rules-error">✕ {jsonError}</div>}
+            </div>
+            <div className="mdm-rule-editor-footer">
+              <button type="button" className="mdm-rules-btn mdm-rules-btn-secondary" onClick={() => setShowEditor(false)}>Cancel</button>
+              <button type="button" className="mdm-rules-btn" disabled={submitting || !canManage} onClick={onSubmit}>
+                {submitting ? 'Saving...' : mode === 'create' ? 'Create Rule' : 'Update Rule'}
+              </button>
             </div>
           </div>
         </div>

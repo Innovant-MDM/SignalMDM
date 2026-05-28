@@ -24,9 +24,11 @@ export const CanonicalModelsPage: React.FC = () => {
   const { activeTenantId, activeTenantName } = useTenantConfig();
   const [fields, setFields] = useState<CanonicalFieldRead[]>([]);
   const [selected, setSelected] = useState<CanonicalFieldRead | null>(null);
+  const [viewField, setViewField] = useState<CanonicalFieldRead | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>('create');
+  const [showEditor, setShowEditor] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -86,6 +88,11 @@ export const CanonicalModelsPage: React.FC = () => {
     });
   };
 
+  const openCreateModal = () => {
+    reset();
+    setShowEditor(true);
+  };
+
   const edit = (f: CanonicalFieldRead) => {
     setMode('edit');
     setSelected(f);
@@ -98,6 +105,7 @@ export const CanonicalModelsPage: React.FC = () => {
       standardization_type: f.standardization_type || 'TEXT',
         status: (f.status as FieldStatus) || 'ACTIVE',
     });
+    setShowEditor(true);
   };
 
   const validate = (): string | null => {
@@ -133,6 +141,7 @@ export const CanonicalModelsPage: React.FC = () => {
       }
       await load();
       reset();
+      setShowEditor(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save canonical field');
     } finally {
@@ -140,13 +149,34 @@ export const CanonicalModelsPage: React.FC = () => {
     }
   };
 
-  const toggleStatus = async (f: CanonicalFieldRead) => {
-    const next = f.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+  const archiveField = async (f: CanonicalFieldRead) => {
+    const next = f.status === 'ARCHIVED' ? 'ACTIVE' : 'ARCHIVED';
+    const ok = window.confirm(`${next === 'ARCHIVED' ? 'Archive' : 'Unarchive'} canonical field "${f.canonical_field_name}"?`);
+    if (!ok) return;
     try {
       await canonicalService.patchStatus(f.field_id, next, activeTenantId ?? undefined);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update field status');
+      setError(e instanceof Error ? e.message : 'Failed to update canonical field status');
+    }
+  };
+
+  const deleteField = async (f: CanonicalFieldRead) => {
+    if (f.status === 'INACTIVE') {
+      setError('Field is already deleted (inactive).');
+      return;
+    }
+    const ok = window.confirm(`Delete canonical field "${f.canonical_field_name}"? This will mark it as inactive.`);
+    if (!ok) return;
+    try {
+      await canonicalService.patchStatus(f.field_id, 'INACTIVE', activeTenantId ?? undefined);
+      if (selected?.field_id === f.field_id) {
+        setSelected(null);
+      }
+      await load();
+      setMode('create');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete canonical field');
     }
   };
 
@@ -161,7 +191,7 @@ export const CanonicalModelsPage: React.FC = () => {
           <button type="button" className="mdm-canon-btn mdm-canon-btn-secondary" onClick={() => void load()} disabled={loading}>
             {loading ? '…' : '↻'} Refresh
           </button>
-          <button type="button" className="mdm-canon-btn" onClick={reset}>+ New Canonical Field</button>
+          <button type="button" className="mdm-canon-btn" onClick={openCreateModal}>+ New Canonical Field</button>
           {activeTenantName && <span className="mdm-canon-tenant">Tenant: {activeTenantName}</span>}
         </div>
       </div>
@@ -214,98 +244,133 @@ export const CanonicalModelsPage: React.FC = () => {
         >
           Export CSV
         </button>
-        <span className="mdm-canon-count-label">{filtered.length} field{filtered.length !== 1 ? 's' : ''}</span>
       </div>
 
       {error && <div className="mdm-canon-error">✕ {error}</div>}
       {loading ? (
         <div className="mdm-canon-card">Loading canonical fields...</div>
       ) : (
-        <div className="mdm-canon-grid">
-          <div className="mdm-canon-card mdm-canon-table-card">
-            <h3>Canonical Fields ({filtered.length})</h3>
-            <div className="mdm-canon-table-wrap">
-              <table className="mdm-canon-table">
-                <thead>
-                  <tr>
-                    <th>Entity</th>
-                    <th>Field</th>
-                    <th>Type</th>
-                    <th>Required</th>
-                    <th>Status</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((f) => (
-                    <tr key={f.field_id} className={selected?.field_id === f.field_id ? 'active' : ''}>
-                      <td><span className="mdm-canon-entity-chip">{f.entity_type}</span></td>
-                      <td><span className="mdm-canon-source-field">{f.canonical_field_name}</span></td>
-                      <td><span className="mdm-canon-type-chip">{f.data_type}</span></td>
-                      <td>{f.is_required ? 'YES' : 'NO'}</td>
-                      <td><span className={`mdm-canon-badge mdm-canon-badge--${f.status}`}>{f.status}</span></td>
-                      <td>
-                        <button type="button" className="mdm-canon-link" onClick={() => edit(f)}>Edit</button>
-                        <button type="button" className="mdm-canon-link" onClick={() => toggleStatus(f)}>
-                          {f.status === 'ACTIVE' ? 'Disable' : 'Enable'}
+        <div className="mdm-canon-card mdm-canon-table-card">
+          <h3>Canonical Fields ({filtered.length})</h3>
+          <div className="mdm-canon-table-wrap">
+            <table className="mdm-canon-table">
+              <thead>
+                <tr>
+                  <th>Entity</th>
+                  <th>Field</th>
+                  <th>Type</th>
+                  <th>Required</th>
+                  <th>Status</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((f) => (
+                  <tr key={f.field_id} className={selected?.field_id === f.field_id ? 'active' : ''} onClick={() => setSelected(f)}>
+                    <td><span className="mdm-canon-entity-chip">{f.entity_type}</span></td>
+                    <td><span className="mdm-canon-source-field">{f.canonical_field_name}</span></td>
+                    <td><span className="mdm-canon-type-chip">{f.data_type}</span></td>
+                    <td>{f.is_required ? 'YES' : 'NO'}</td>
+                    <td><span className={`mdm-canon-badge mdm-canon-badge--${f.status}`}>{f.status}</span></td>
+                    <td>
+                      <div className="mdm-canon-action-row" onClick={(e) => e.stopPropagation()}>
+                        <button type="button" className="mdm-link-btn mdm-link-btn--edit" onClick={() => edit(f)}>Edit</button>
+                        <button type="button" className="mdm-link-btn mdm-link-btn--archive" onClick={() => void archiveField(f)}>
+                          {f.status === 'ARCHIVED' ? 'Unarchive' : 'Archive'}
                         </button>
-                        <button type="button" className="mdm-canon-link" onClick={() => setSelected(f)}>View</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                        <button type="button" className="mdm-link-btn mdm-link-btn--danger" onClick={() => void deleteField(f)}>Delete</button>
+                        <button type="button" className="mdm-link-btn mdm-link-btn--view" onClick={() => { setSelected(f); setViewField(f); }}>View</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="mdm-canon-table-empty">
+                      <span className="mdm-canon-empty-icon">◫</span>
+                      <p>
+                        {fields.length === 0
+                          ? 'No canonical fields yet. Create your first canonical field to get started.'
+                          : 'No canonical fields match the current filters.'}
+                      </p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
+        </div>
+      )}
 
-          <div className="mdm-canon-card">
-            <h3>{mode === 'create' ? 'Create Field' : 'Edit Field'}</h3>
-            <div className="mdm-canon-form">
-              <input className="mdm-canon-input" placeholder="Entity type (e.g. CUSTOMER)" value={form.entity_type} onChange={(e) => setForm((p) => ({ ...p, entity_type: e.target.value.toUpperCase() }))} />
-              <input className="mdm-canon-input" placeholder="Canonical field name (snake_case)" value={form.canonical_field_name} onChange={(e) => setForm((p) => ({ ...p, canonical_field_name: e.target.value }))} />
-              <select className="mdm-canon-select" value={form.data_type} onChange={(e) => setForm((p) => ({ ...p, data_type: e.target.value }))}>
-                {DATA_TYPES.map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
-              <select className="mdm-canon-select" value={form.validation_type} onChange={(e) => setForm((p) => ({ ...p, validation_type: e.target.value }))}>
-                {VALIDATION_TYPES.map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
-              <select className="mdm-canon-select" value={form.standardization_type} onChange={(e) => setForm((p) => ({ ...p, standardization_type: e.target.value }))}>
-                {STANDARDIZATION_TYPES.map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
-              <select className="mdm-canon-select" value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value as FieldStatus }))}>
-                <option value="ACTIVE">ACTIVE</option>
-                <option value="INACTIVE">INACTIVE</option>
-                <option value="ARCHIVED">ARCHIVED</option>
-              </select>
-              <label className="mdm-canon-checkbox">
-                <input type="checkbox" checked={form.is_required} onChange={(e) => setForm((p) => ({ ...p, is_required: e.target.checked }))} />
-                Required field
-              </label>
+      {viewField && (
+        <div className="mdm-canon-drawer-overlay" onClick={() => setViewField(null)}>
+          <aside className="mdm-canon-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="mdm-canon-drawer-header">
+              <div>
+                <h3 className="mdm-canon-drawer-title">Saved Configuration: {viewField.canonical_field_name}</h3>
+                <p className="mdm-canon-drawer-sub">{viewField.entity_type} · {viewField.data_type}</p>
+              </div>
+              <button type="button" className="mdm-canon-drawer-close" onClick={() => setViewField(null)}>✕</button>
             </div>
-            <div className="mdm-canon-actions">
+            <div className="mdm-canon-drawer-body">
+              <pre className="mdm-canon-pre">
+{JSON.stringify({
+  entity_type: viewField.entity_type,
+  canonical_field_name: viewField.canonical_field_name,
+  data_type: viewField.data_type,
+  is_required: viewField.is_required,
+  validation_type: viewField.validation_type,
+  standardization_type: viewField.standardization_type,
+  status: viewField.status,
+  updated_at: viewField.updated_at,
+}, null, 2)}
+              </pre>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {showEditor && (
+        <div className="mdm-canon-overlay" onClick={() => setShowEditor(false)} role="presentation">
+          <div className="mdm-canon-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="mdm-canon-modal-header">
+              <div>
+                <h3 className="mdm-canon-modal-title">{mode === 'create' ? 'Create Canonical Field' : 'Edit Canonical Field'}</h3>
+                <p className="mdm-canon-modal-sub">Configure canonical field definition and validation rules.</p>
+              </div>
+              <button type="button" className="mdm-canon-modal-close" onClick={() => setShowEditor(false)}>✕</button>
+            </div>
+            <div className="mdm-canon-modal-body">
+              <div className="mdm-canon-form">
+                <input className="mdm-canon-input" placeholder="Entity type (e.g. CUSTOMER)" value={form.entity_type} onChange={(e) => setForm((p) => ({ ...p, entity_type: e.target.value.toUpperCase() }))} />
+                <input className="mdm-canon-input" placeholder="Canonical field name (snake_case)" value={form.canonical_field_name} onChange={(e) => setForm((p) => ({ ...p, canonical_field_name: e.target.value }))} />
+                <select className="mdm-canon-select" value={form.data_type} onChange={(e) => setForm((p) => ({ ...p, data_type: e.target.value }))}>
+                  {DATA_TYPES.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <select className="mdm-canon-select" value={form.validation_type} onChange={(e) => setForm((p) => ({ ...p, validation_type: e.target.value }))}>
+                  {VALIDATION_TYPES.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <select className="mdm-canon-select" value={form.standardization_type} onChange={(e) => setForm((p) => ({ ...p, standardization_type: e.target.value }))}>
+                  {STANDARDIZATION_TYPES.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <select className="mdm-canon-select" value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value as FieldStatus }))}>
+                  <option value="ACTIVE">ACTIVE</option>
+                  <option value="INACTIVE">INACTIVE</option>
+                  <option value="ARCHIVED">ARCHIVED</option>
+                </select>
+                <label className="mdm-canon-checkbox">
+                  <input type="checkbox" checked={form.is_required} onChange={(e) => setForm((p) => ({ ...p, is_required: e.target.checked }))} />
+                  Required field
+                </label>
+              </div>
+            </div>
+            <div className="mdm-canon-modal-footer">
+              <button type="button" className="mdm-canon-btn mdm-canon-btn-secondary" onClick={() => setShowEditor(false)}>Cancel</button>
               <button type="button" className="mdm-canon-btn" onClick={save} disabled={saving}>
                 {saving ? 'Saving...' : mode === 'create' ? 'Create Field' : 'Update Field'}
               </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {selected && (
-        <div className="mdm-canon-card">
-          <h3>Saved Configuration Preview: {selected.canonical_field_name}</h3>
-          <pre className="mdm-canon-pre">
-{JSON.stringify({
-  entity_type: selected.entity_type,
-  canonical_field_name: selected.canonical_field_name,
-  data_type: selected.data_type,
-  is_required: selected.is_required,
-  validation_type: selected.validation_type,
-  standardization_type: selected.standardization_type,
-  status: selected.status,
-  updated_at: selected.updated_at,
-}, null, 2)}
-          </pre>
         </div>
       )}
     </div>
