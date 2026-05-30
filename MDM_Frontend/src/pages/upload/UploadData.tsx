@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback, useEffect, type ChangeEvent, type DragEvent } from 'react';
 import '../../styles/theme.css';
 import '../../styles/UploadData.css';
-import { authService } from '../../services/authService';
 import { useTenantConfig } from '../../context/TenantConfigContext';
+import { useAuth } from '../../context/AuthContext';
 import {
   uploadSessionService,
   type UploadSession,
@@ -11,6 +11,7 @@ import {
 import { ApiError } from '../../services/api';
 import { useSnackbar } from '../../context/SnackbarContext';
 import { domainService, type DomainRecord } from '../../services/domainService';
+import { tenantService, type TenantRecord } from '../../services/tenantService';
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -126,7 +127,8 @@ export default function UploadData() {
   const snackbar = useSnackbar();
   // ── tenant from global context (same as IngestionRuns) ──
   const { activeTenantId, activeTenantName } = useTenantConfig();
-  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const { admin } = useAuth();
+  const isSuperAdmin = admin?.tenant_id === 'platform';
 
   // ── sessions ──
   const [sessions, setSessions] = useState<UploadSession[]>([]);
@@ -141,6 +143,9 @@ export default function UploadData() {
   // ── new-session form ──
   const [newDomain, setNewDomain] = useState('');
   const [newSessionName, setNewSessionName] = useState('');
+  const [selectedTenantId, setSelectedTenantId] = useState('');
+  const [tenants, setTenants] = useState<TenantRecord[]>([]);
+  const [tenantsLoading, setTenantsLoading] = useState(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [creating, setCreating] = useState(false);
   const [availableDomains, setAvailableDomains] = useState<DomainRecord[]>([]);
@@ -175,12 +180,7 @@ export default function UploadData() {
     }
   }, []);
 
-  // Detect platform admin from cookie
-  useEffect(() => {
-    const info = authService.getAdminInfoFromCookie();
-    const superAdmin = info?.tenant_id === 'platform' || info?.role === 'admin';
-    setIsSuperAdmin(superAdmin);
-  }, []);
+
 
   // Reload sessions whenever the global active tenant changes
   useEffect(() => {
@@ -229,8 +229,11 @@ export default function UploadData() {
 
   // ── new session ───────────────────────────────────────────────────────────
 
-  const validateSessionForm = () => {
+  const validateSessionForm = (effectiveTenantId: string | null) => {
     const errs: Record<string, string> = {};
+    if (isSuperAdmin && !effectiveTenantId) {
+      errs.tenant = 'Tenant is required';
+    }
     if (!newDomain.trim()) errs.domain = 'Domain is required';
     if (!newSessionName.trim()) errs.sessionName = 'Session name is required';
     else if (sessions.some(s => s.session_name.toLowerCase() === newSessionName.trim().toLowerCase()))
@@ -240,24 +243,22 @@ export default function UploadData() {
   };
 
   const handleCreateSession = async () => {
-    if (isSuperAdmin && !activeTenantId) {
-      setFormErrors({ general: 'Please select a tenant from the top dropdown first.' });
-      return;
-    }
-    if (!validateSessionForm()) return;
+    const effectiveTenantId = activeTenantId ?? selectedTenantId;
+    if (!validateSessionForm(effectiveTenantId)) return;
     setCreating(true);
     try {
       const s = await uploadSessionService.createSession(
         { 
           session_name: newSessionName.trim(), 
           domain: newDomain.trim(),
-          tenant_id: activeTenantId ?? undefined,
+          tenant_id: effectiveTenantId ?? undefined,
         },
-        activeTenantId ?? undefined,
+        effectiveTenantId ?? undefined,
       );
-      await loadSessions(activeTenantId);
+      await loadSessions(effectiveTenantId);
       setNewDomain('');
       setNewSessionName('');
+      setSelectedTenantId('');
       setFormErrors({});
       setView('detail');
       setActiveSession(s);
@@ -507,13 +508,40 @@ export default function UploadData() {
           )}
           <button
             className="up-btn up-btn--primary"
-            onClick={() => { setView('newSession'); setFormErrors({}); setNewDomain(''); setNewSessionName(''); }}
+            onClick={() => {
+              setView('newSession');
+              setFormErrors({});
+              setNewDomain('');
+              setNewSessionName('');
+              setSelectedTenantId('');
+              setAvailableDomains([]);
+              if (isSuperAdmin && !activeTenantId) {
+                setTenantsLoading(true);
+                tenantService.listTenants(0, 500)
+                  .then(list => setTenants(list.filter(t => t.status === 'ACTIVE')))
+                  .catch(() => {})
+                  .finally(() => setTenantsLoading(false));
+              }
+            }}
             type="button"
           >
             + New Session
           </button>
         </div>
       </div>
+
+      {/* Tenant Scope Context Banner — shown when platform admin is in ALL mode */}
+      {isSuperAdmin && !activeTenantId && (
+        <div className="up-scope-banner">
+          <span className="up-scope-banner__icon">🎯</span>
+          <span className="up-scope-banner__text">
+            <strong>Tenant scope required.</strong> You are viewing all tenants. To create sessions, upload files, or manage domains, please select a <strong>specific tenant</strong> from the Tenant Scope selector in the top-right corner.
+          </span>
+          <span className="up-scope-banner__arrow">
+            Select Tenant ↗
+          </span>
+        </div>
+      )}
 
       {pageError && (
         <div className="up-alert up-alert--error">
@@ -590,12 +618,59 @@ export default function UploadData() {
                 {formErrors.general && (
                   <div className="up-alert up-alert--error"><span>✕</span><span>{formErrors.general}</span></div>
                 )}
+                {/* Tenant selection for Platform Admins in ALL mode */}
+                {isSuperAdmin && !activeTenantId && (
+                  <div className={`up-field${formErrors.tenant ? ' up-field--error' : ''}`}>
+                    <label className="up-label">Tenant <span className="up-required">*</span></label>
+                    {tenantsLoading ? (
+                      <div className="up-loading" style={{ padding: '0.5rem 0', fontSize: '0.85rem' }}>Loading tenants…</div>
+                    ) : (
+                      <select
+                        className="up-input"
+                        value={selectedTenantId}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setSelectedTenantId(val);
+                          setNewDomain('');
+                          if (val) {
+                            void loadDomains(val);
+                          } else {
+                            setAvailableDomains([]);
+                          }
+                        }}
+                      >
+                        <option value="">-- Select a Tenant --</option>
+                        {tenants.map(t => (
+                          <option key={t.id} value={t.id}>
+                            {t.tenantName} ({t.tenantCode})
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {formErrors.tenant && <span className="up-error-msg">{formErrors.tenant}</span>}
+                  </div>
+                )}
+
+                {/* Scoped tenant indicator */}
+                {isSuperAdmin && activeTenantId && activeTenantName && (
+                  <div className="up-field">
+                    <label className="up-label">Tenant</label>
+                    <input
+                      className="up-input"
+                      value={activeTenantName}
+                      readOnly
+                      style={{ background: 'var(--bg-muted, #f5f5f5)', cursor: 'default', opacity: 0.8 }}
+                    />
+                  </div>
+                )}
+
                 <div className={`up-field${formErrors.domain ? ' up-field--error' : ''}`}>
                   <label className="up-label">Domain <span className="up-required">*</span></label>
                   <select
                     className="up-input"
                     value={newDomain}
                     onChange={e => setNewDomain(e.target.value)}
+                    disabled={isSuperAdmin && !activeTenantId && !selectedTenantId}
                   >
                     <option value="">-- Select a Domain --</option>
                     {availableDomains.map(d => (

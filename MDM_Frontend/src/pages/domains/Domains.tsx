@@ -7,7 +7,9 @@ import {
   type DomainUpdatePayload,
   ApiError,
 } from '../../services/domainService';
+import { tenantService, type TenantRecord } from '../../services/tenantService';
 import { useTenantConfig } from '../../context/TenantConfigContext';
+import { useAuth } from '../../context/AuthContext';
 import { useSnackbar } from '../../context/SnackbarContext';
 import '../../styles/theme.css';
 import '../../styles/Domains.css';
@@ -31,22 +33,56 @@ function CreateDomainModal({
   onClose,
   onCreate,
   saving,
+  isPlatformAdmin,
+  activeTenantId,
+  activeTenantName,
 }: {
   onClose: () => void;
-  onCreate: (payload: DomainCreatePayload) => void;
+  onCreate: (payload: DomainCreatePayload, tenantId: string) => void;
   saving: boolean;
+  isPlatformAdmin: boolean;
+  activeTenantId: string | null;
+  activeTenantName: string | null;
 }) {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
+  const [selectedTenantId, setSelectedTenantId] = useState(activeTenantId ?? '');
+  const [tenants, setTenants] = useState<TenantRecord[]>([]);
+  const [tenantsLoading, setTenantsLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // Whether the tenant dropdown should be shown:
+  // Only for platform admins who haven't already scoped to a specific tenant
+  const showTenantPicker = isPlatformAdmin && !activeTenantId;
+
+  // Load tenant list when the modal opens (only for platform admins in ALL mode)
+  useEffect(() => {
+    if (!showTenantPicker) return;
+    setTenantsLoading(true);
+    tenantService
+      .listTenants(0, 500)
+      .then(list => {
+        setTenants(list.filter(t => t.status === 'ACTIVE'));
+      })
+      .catch(() => {})
+      .finally(() => setTenantsLoading(false));
+  }, [showTenantPicker]);
 
   const handleSubmit = () => {
     const errs: Record<string, string> = {};
     if (!name.trim()) errs.name = 'Domain name is required.';
     else if (name.trim().length > 100) errs.name = 'Max 100 characters.';
+
+    // Determine the tenant to use
+    const effectiveTenantId = activeTenantId ?? selectedTenantId;
+    if (!effectiveTenantId) errs.tenant = 'Please select a tenant for this domain.';
+
     setErrors(errs);
     if (Object.keys(errs).length) return;
-    onCreate({ domain_name: name.trim(), description: desc.trim() || undefined });
+    onCreate(
+      { domain_name: name.trim(), description: desc.trim() || undefined },
+      effectiveTenantId!,
+    );
   };
 
   return (
@@ -57,6 +93,41 @@ function CreateDomainModal({
           <button className="dm-modal__close" onClick={onClose}>✕</button>
         </div>
         <div className="dm-modal__body">
+          {/* Tenant selector — only for platform admins in ALL mode */}
+          {showTenantPicker && (
+            <div className={`dm-field${errors.tenant ? ' dm-field--error' : ''}`}>
+              <label className="dm-label">Tenant <span className="dm-required">*</span></label>
+              {tenantsLoading ? (
+                <div className="dm-loading" style={{ padding: '0.5rem 0', fontSize: '0.85rem' }}>Loading tenants…</div>
+              ) : (
+                <select
+                  id="dm-create-tenant"
+                  className="dm-select"
+                  value={selectedTenantId}
+                  onChange={e => setSelectedTenantId(e.target.value)}
+                >
+                  <option value="">— Select a tenant —</option>
+                  {tenants.map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.tenantName} ({t.tenantCode})
+                    </option>
+                  ))}
+                </select>
+              )}
+              {errors.tenant && <span className="dm-error-msg">{errors.tenant}</span>}
+            </div>
+          )}
+
+          {/* Show scoped tenant info when a specific tenant is already selected */}
+          {isPlatformAdmin && activeTenantId && activeTenantName && (
+            <div className="dm-field">
+              <label className="dm-label">Tenant</label>
+              <div className="dm-input" style={{ background: 'var(--bg-muted, #f5f5f5)', cursor: 'default' }}>
+                {activeTenantName}
+              </div>
+            </div>
+          )}
+
           <div className={`dm-field${errors.name ? ' dm-field--error' : ''}`}>
             <label className="dm-label">Domain Name <span className="dm-required">*</span></label>
             <input
@@ -65,7 +136,7 @@ function CreateDomainModal({
               placeholder="e.g. Customer, Finance, HR"
               value={name}
               onChange={e => setName(e.target.value)}
-              autoFocus
+              autoFocus={!showTenantPicker}
             />
             {errors.name && <span className="dm-error-msg">{errors.name}</span>}
           </div>
@@ -183,8 +254,10 @@ function EditDomainDrawer({
 /* ─── Main Page ─────────────────────────────────────────────────────────── */
 
 export default function Domains() {
-  const { activeTenantId } = useTenantConfig();
+  const { activeTenantId, activeTenantName } = useTenantConfig();
+  const { admin } = useAuth();
   const snackbar = useSnackbar();
+  const isPlatformAdmin = admin?.tenant_id === 'platform';
 
   const [domains, setDomains]   = useState<DomainRecord[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -217,10 +290,10 @@ export default function Domains() {
   useEffect(() => { loadDomains(); }, [loadDomains]);
 
   /* ── Create ────────────────────────────────────────────────────────── */
-  const handleCreate = async (payload: DomainCreatePayload) => {
+  const handleCreate = async (payload: DomainCreatePayload, tenantId: string) => {
     setSaving(true);
     try {
-      const newDomain = await domainService.createDomain(payload, activeTenantId ?? undefined);
+      const newDomain = await domainService.createDomain(payload, tenantId);
       setDomains(prev => [newDomain, ...prev]);
       setShowCreate(false);
       snackbar.showSuccess(`Domain "${newDomain.domainName}" created successfully.`);
@@ -294,6 +367,19 @@ export default function Domains() {
           </button>
         </div>
       </div>
+
+      {/* Tenant Scope Context Banner — shown when platform admin is in ALL mode */}
+      {isPlatformAdmin && !activeTenantId && (
+        <div className="dm-scope-banner">
+          <span className="dm-scope-banner__icon">🎯</span>
+          <span className="dm-scope-banner__text">
+            <strong>Tenant scope required.</strong> You are viewing all tenants. To register new domains, please select a <strong>specific tenant</strong> from the Tenant Scope selector in the top-right corner.
+          </span>
+          <span className="dm-scope-banner__arrow">
+            Select Tenant ↗
+          </span>
+        </div>
+      )}
 
       {/* Error Banner */}
       {error && (
@@ -448,6 +534,9 @@ export default function Domains() {
           onClose={() => setShowCreate(false)}
           onCreate={handleCreate}
           saving={saving}
+          isPlatformAdmin={isPlatformAdmin}
+          activeTenantId={activeTenantId}
+          activeTenantName={activeTenantName}
         />
       )}
 
