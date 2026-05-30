@@ -11,7 +11,8 @@ __pycache__/
 desktop.ini
 .env
 venv/
-MDM_Backend/storage/uploads/*
+MDM_Backend/storage/uploads/**
+!MDM_Backend/storage/uploads/
 !MDM_Backend/storage/uploads/.gitkeep
 requirements.txt
 # Dependencies
