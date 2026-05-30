@@ -514,13 +514,15 @@ export default function UploadData() {
               setNewDomain('');
               setNewSessionName('');
               setSelectedTenantId('');
-              setAvailableDomains([]);
               if (isSuperAdmin && !activeTenantId) {
+                setAvailableDomains([]);
                 setTenantsLoading(true);
                 tenantService.listTenants(0, 500)
                   .then(list => setTenants(list.filter(t => t.status === 'ACTIVE')))
                   .catch(() => {})
                   .finally(() => setTenantsLoading(false));
+              } else {
+                void loadDomains(activeTenantId);
               }
             }}
             type="button"
